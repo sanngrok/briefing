@@ -1,0 +1,104 @@
+# 금융/트렌드 AI 시그널 리포트 플랫폼
+
+국내 주식 시세와 뉴스를 평일 장마감 후 자동 수집하고, LLM으로 뉴스 감정을 분석해
+**감정 급변 시그널**을 탐지한 뒤, 일일 리포트를 생성해 대시보드로 보여주는
+백그라운드 데이터 파이프라인 플랫폼입니다.
+
+> ⚠️ **정보 제공 목적이며 투자 판단의 근거가 아닙니다.** 공개 데이터만 사용합니다.
+
+---
+
+## 아키텍처 (읽기/쓰기 2-레이어 분리)
+
+```
+[레이어 A] GitHub Actions cron (평일 장마감 후)
+   fetch(시세·뉴스) → LLM 감정/태그 → 감정 집계 → 급변 시그널 → LLM 리포트
+        │ write
+        ▼
+   Supabase (Postgres)
+        ▲ read only
+        │
+[레이어 B] FastAPI (Fly/Render) ── 읽기 전용
+        │ JSON
+        ▼
+[레이어 C] Vercel 프론트 (차트·시그널 카드·리포트)
+```
+
+- **파이프라인(쓰기)** 과 **서빙 API(읽기)** 는 분리된 서비스로 배포합니다.
+- 무료 인스턴스가 슬립해도 스케줄 잡은 독립적으로 실행됩니다.
+
+---
+
+## 저장소 구조
+
+```
+briefing/
+├── db/
+│   └── schema.sql          # Supabase DDL (tickers/prices/news/sentiment_daily/signals/reports)
+├── pipeline/               # 레이어 A — 쓰기 전용 파이프라인 잡
+│   ├── pipeline.py         # 수집 → 감정 → 집계 → 시그널 → 리포트 오케스트레이터
+│   └── requirements.txt
+├── api/                    # 레이어 B — 읽기 전용 FastAPI (M6)
+├── frontend/               # 레이어 C — Vercel React(TS) 대시보드 (M7)
+├── .github/workflows/      # cron 파이프라인 워크플로우 (M8)
+├── .env.example            # 환경변수 문서 (실제 값 없음)
+└── README.md
+```
+
+---
+
+## 환경변수
+
+| 이름 | 용도 | 발급처 |
+|---|---|---|
+| `SUPABASE_URL` / `SUPABASE_KEY` | DB 저장/조회 | Supabase (파이프라인=service_role) |
+| `ANTHROPIC_API_KEY` | 감정분석/리포트 | Anthropic |
+| `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 뉴스 검색 | 네이버 개발자센터 |
+
+- 로컬: `.env.example` → `.env` 복사 후 값 입력 (`.env` 는 커밋 금지).
+- 잡: GitHub repo Secrets. 서빙: Fly/Render 환경변수. 프론트: Vercel 환경변수.
+
+---
+
+## 로컬 실행 (파이프라인)
+
+```bash
+cd pipeline
+python -m venv .venv
+# Windows PowerShell:  .venv\Scripts\Activate.ps1
+# macOS/Linux:         source .venv/bin/activate
+pip install -r requirements.txt
+
+# 환경변수 로드 후 실행
+python pipeline.py
+```
+
+> `pipeline.py` 는 환경변수(`SUPABASE_URL` 등)가 있어야 import 시점에 클라이언트를 생성합니다.
+> 키 연동 전에는 실행되지 않는 것이 정상입니다 (구조 우선, 키 연동은 이후 단계).
+
+---
+
+## 개발 로드맵 (마일스톤)
+
+| # | 내용 | 상태 |
+|---|---|---|
+| M0 | 프로젝트 스캐폴딩 & 시크릿 골격 | ✅ |
+| M1 | 스키마 적용 & 워치리스트 시드 | ⬜ |
+| M2 | 시세 슬라이스 (pykrx 검증) | ⬜ |
+| M3 | 뉴스 + 감정 슬라이스 | ⬜ |
+| M4 | 집계 & 시그널 + 단위테스트 | ⬜ |
+| M5 | 리포트 (그라운딩) | ⬜ |
+| M6 | FastAPI 서빙 레이어 | ⬜ |
+| M7 | 프론트엔드 (Recharts) | ⬜ |
+| M8 | GitHub Actions 워크플로우 | ⬜ |
+| M9 | 배포 (Fly/Render + Vercel) | ⬜ |
+
+---
+
+## 시그널 정의 (뉴스 감정 급변)
+
+- 종목별 그날 뉴스 **평균 감정(-1~1)** 계산.
+- **기준선** = 직전 `BASELINE_DAYS`(기본 5)일 평균 감정.
+- 그날 기사 수 ≥ `MIN_NEWS`(기본 3) **AND** |오늘 - 기준선| ≥ `THRESHOLD`(기본 0.40) → 시그널 발화.
+- 방향: delta>0 → `sentiment_surge_pos`, delta<0 → `sentiment_surge_neg`.
+- 심각도: |delta| ≥0.7 `high`, ≥0.5 `mid`, 그 외 `low`.
