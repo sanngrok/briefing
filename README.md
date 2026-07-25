@@ -102,6 +102,15 @@ python check_prices.py 005930       # 특정 종목만
 ```
 주말·공휴일에도 최근 영업일 데이터를 실제 체결일 기준으로 가져옵니다.
 
+**단위 테스트 (키 불필요, M3~)**
+```bash
+cd pipeline
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
+```
+뉴스 파싱(`parse_news_item`)과 감정 JSON 파싱(`parse_sentiment`)을 순수 함수로 검증합니다.
+(네이버/Anthropic 실제 호출은 키 연동 후 파이프라인 전체 실행으로 확인)
+
 ---
 
 ## 개발 로드맵 (마일스톤)
@@ -111,7 +120,7 @@ python check_prices.py 005930       # 특정 종목만
 | M0 | 프로젝트 스캐폴딩 & 시크릿 골격 | ✅ |
 | M1 | 스키마 적용 & 워치리스트 시드 | ✅ |
 | M2 | 시세 슬라이스 (pykrx 검증) | ✅ |
-| M3 | 뉴스 + 감정 슬라이스 | ⬜ |
+| M3 | 뉴스 + 감정 슬라이스 | ✅ |
 | M4 | 집계 & 시그널 + 단위테스트 | ⬜ |
 | M5 | 리포트 (그라운딩) | ⬜ |
 | M6 | FastAPI 서빙 레이어 | ⬜ |

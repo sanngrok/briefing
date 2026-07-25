@@ -21,7 +21,9 @@ pipeline.py — 일일 파이프라인 (GitHub Actions cron 에서 실행)
 """
 
 import os
+import re
 import json
+import html
 import hashlib
 from datetime import date, datetime, timedelta
 
@@ -111,6 +113,37 @@ def collect_prices(tickers):
 def _hash(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()
 
+def _strip_tags(s: str) -> str:
+    """HTML 태그 제거 + 엔티티 복원 (&amp; &quot; &#39; 등). 네이버 응답 정규화."""
+    s = re.sub(r"<[^>]+>", "", s or "")
+    return html.unescape(s).strip()
+
+def _parse_pubdate(s):
+    try:
+        return datetime.strptime(s, "%a, %d %b %Y %H:%M:%S %z").isoformat()
+    except Exception:
+        return None
+
+def parse_news_item(ticker_id, item: dict):
+    """네이버 뉴스 API item 1건을 news 행 형태로 변환. (순수 함수 — 네트워크/DB 없음)
+
+    - url 은 originallink(원문) 우선, 없으면 link.
+    - url 이 없으면 None 반환(스킵).
+    - _desc 는 감정분석 입력용 임시 필드로, DB 저장 전 제거된다.
+    """
+    url = item.get("originallink") or item.get("link")
+    if not url:
+        return None
+    return {
+        "ticker_id":    ticker_id,
+        "url_hash":     _hash(url),
+        "title":        _strip_tags(item.get("title", "")),
+        "url":          url,
+        "source":       "naver",
+        "published_at": _parse_pubdate(item.get("pubDate")),
+        "_desc":        _strip_tags(item.get("description", "")),
+    }
+
 def collect_news(tickers):
     """종목 aliases 로 뉴스 검색, url_hash 로 dedup 후 새 기사만 반환."""
     import requests
@@ -119,6 +152,7 @@ def collect_news(tickers):
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"],
     }
     new_items = []
+    seen = set()   # 이번 실행 안에서의 중복(같은 기사 다중 매칭) 방지
     for t in tickers:
         query = (t["aliases"] or [t["name"]])[0]
         try:
@@ -134,38 +168,40 @@ def collect_news(tickers):
             continue
 
         for it in items:
-            url = it.get("originallink") or it.get("link")
-            h = _hash(url)
-            # 이미 있으면 skip
+            row = parse_news_item(t["id"], it)
+            if row is None:
+                continue
+            h = row["url_hash"]
+            if h in seen:
+                continue
+            # DB 에 이미 있으면 skip (비용 방어: LLM 재호출 금지)
             exists = get_sb().table("news").select("id").eq("url_hash", h).execute()
             if exists.data:
                 continue
-            new_items.append({
-                "ticker_id":    t["id"],
-                "url_hash":     h,
-                "title":        _strip_tags(it.get("title", "")),
-                "url":          url,
-                "source":       "naver",
-                "published_at": _parse_pubdate(it.get("pubDate")),
-                # sentiment/summary/tags 는 다음 단계에서 채움
-                "_desc":        _strip_tags(it.get("description", "")),
-            })
+            seen.add(h)
+            new_items.append(row)
     print(f"[news] 신규 {len(new_items)}건")
     return new_items
-
-def _strip_tags(s: str) -> str:
-    return s.replace("<b>", "").replace("</b>", "").replace("&quot;", '"').strip()
-
-def _parse_pubdate(s):
-    try:
-        return datetime.strptime(s, "%a, %d %b %Y %H:%M:%S %z").isoformat()
-    except Exception:
-        return None
 
 
 # ======================================================================
 # 3) LLM 감정/태그 (구조화 JSON)
 # ======================================================================
+def parse_sentiment(text: str) -> dict:
+    """LLM 응답 텍스트에서 감정 JSON을 파싱·정규화. (순수 함수)
+
+    - ```json 코드펜스/여백을 벗겨 JSON 만 추출.
+    - sentiment 는 float 로 강제 후 [-1.0, 1.0] 클램프.
+    - tags 는 list[str], summary 는 str 로 정규화.
+    - 파싱 불가 시 예외를 던진다(호출부에서 중립 처리).
+    """
+    data = json.loads(_only_json(text))
+    sentiment = max(-1.0, min(1.0, float(data.get("sentiment", 0.0))))
+    tags = data.get("tags", [])
+    tags = [str(x) for x in tags] if isinstance(tags, list) else []
+    summary = str(data.get("summary", "") or "")
+    return {"sentiment": sentiment, "tags": tags, "summary": summary}
+
 def enrich_news(items):
     """각 기사에 sentiment(-1~1), tags, 요약을 붙여 news upsert."""
     enriched = []
@@ -180,7 +216,7 @@ def enrich_news(items):
                 model=CHEAP_MODEL, max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
-            data = json.loads(_only_json(msg.content[0].text))
+            data = parse_sentiment(msg.content[0].text)
         except Exception as e:
             print(f"[sentiment] 실패, 중립 처리: {e}")
             data = {"sentiment": 0.0, "tags": [], "summary": it["title"]}
