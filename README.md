@@ -155,6 +155,23 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 
 ---
 
+## 자동화 (GitHub Actions, 레이어 A 실행)
+
+[.github/workflows/pipeline.yml](.github/workflows/pipeline.yml) 이 파이프라인을 실행합니다.
+
+- **스케줄**: `cron: '0 7 * * 1-5'` = 07:00 UTC = **16:00 KST 평일**.
+- **수동 실행**: Actions 탭 → `daily-pipeline` → *Run workflow* (`workflow_dispatch`).
+- **중복 방지**: `concurrency` 로 스케줄/수동이 겹쳐도 동시에 두 번 돌지 않음(멱등 안전).
+
+**필요한 repo Secrets** (Settings → Secrets and variables → Actions):
+`SUPABASE_URL`, `SUPABASE_KEY`(service_role), `ANTHROPIC_API_KEY`,
+`NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`.
+
+> Secrets 등록 전에는 스케줄이 돌아도 파이프라인이 키 없음으로 실패합니다(정상).
+> 등록 후 *Run workflow* 로 1회 수동 실행해 Supabase 적재를 확인하세요.
+
+---
+
 ## 개발 로드맵 (마일스톤)
 
 | # | 내용 | 상태 |
@@ -167,7 +184,7 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 | M5 | 리포트 (그라운딩) | ✅ |
 | M6 | FastAPI 서빙 레이어 | ✅ |
 | M7 | 프론트엔드 (Recharts) | ✅ |
-| M8 | GitHub Actions 워크플로우 | ⬜ |
+| M8 | GitHub Actions 워크플로우 | ✅ |
 | M9 | 배포 (Fly/Render + Vercel) | ⬜ |
 
 ---
