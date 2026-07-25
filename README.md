@@ -90,8 +90,17 @@ pip install -r requirements.txt
 python pipeline.py
 ```
 
-> `pipeline.py` 는 환경변수(`SUPABASE_URL` 등)가 있어야 import 시점에 클라이언트를 생성합니다.
-> 키 연동 전에는 실행되지 않는 것이 정상입니다 (구조 우선, 키 연동은 이후 단계).
+> 외부 클라이언트(Supabase/Anthropic)는 **지연 생성**되므로, 키가 없어도 개별 단계를
+> 검증할 수 있습니다. 예: 시세 수집은 키 없이 아래로 확인 가능합니다.
+
+**시세 수집 검증 (키 불필요, M2)**
+```bash
+cd pipeline
+pip install pykrx
+python check_prices.py              # 시드 종목 전체의 최근 영업일 시세 출력
+python check_prices.py 005930       # 특정 종목만
+```
+주말·공휴일에도 최근 영업일 데이터를 실제 체결일 기준으로 가져옵니다.
 
 ---
 
@@ -101,7 +110,7 @@ python pipeline.py
 |---|---|---|
 | M0 | 프로젝트 스캐폴딩 & 시크릿 골격 | ✅ |
 | M1 | 스키마 적용 & 워치리스트 시드 | ✅ |
-| M2 | 시세 슬라이스 (pykrx 검증) | ⬜ |
+| M2 | 시세 슬라이스 (pykrx 검증) | ✅ |
 | M3 | 뉴스 + 감정 슬라이스 | ⬜ |
 | M4 | 집계 & 시그널 + 단위테스트 | ⬜ |
 | M5 | 리포트 (그라운딩) | ⬜ |

@@ -25,48 +25,83 @@ import json
 import hashlib
 from datetime import date, datetime, timedelta
 
-import requests
-from supabase import create_client
-import anthropic
+# third-party(requests/supabase/anthropic/pykrx) 는 각 사용처에서 지연 import 한다.
+# 덕분에 시세만 검증(pykrx만 필요)하는 등 일부 단계만 독립 실행할 수 있다.
 
 # ---- 튜닝 파라미터 -----------------------------------------------------
 BASELINE_DAYS = 5        # 감정 기준선 계산에 쓸 직전 일수
 MIN_NEWS      = 3        # 시그널 발화 최소 기사 수
 THRESHOLD     = 0.40     # |오늘 감정 - 기준선| 이 값 이상이면 급변
 NEWS_PER_TICKER = 10     # 종목당 수집할 뉴스 개수
+PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 위한 조회 범위
 CHEAP_MODEL   = "claude-haiku-4-5-20251001"   # 감정/태그용
 REPORT_MODEL  = "claude-sonnet-5"             # 리포트용 (모델명은 현재 사용 가능 값으로)
 
-sb  = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
-ai  = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 TODAY = date.today()
+
+# 외부 클라이언트는 지연(lazy) 생성한다.
+# 이렇게 하면 시세만 검증할 때(키 불필요)처럼 일부 단계만 import/실행할 수 있다.
+_sb = None
+_ai = None
+
+def get_sb():
+    """Supabase 클라이언트(쓰기: service_role). 최초 호출 시 생성."""
+    global _sb
+    if _sb is None:
+        from supabase import create_client
+        _sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    return _sb
+
+def get_ai():
+    """Anthropic 클라이언트. 최초 호출 시 생성."""
+    global _ai
+    if _ai is None:
+        import anthropic
+        _ai = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _ai
 
 
 # ======================================================================
 # 1) 시세 수집
 # ======================================================================
-def collect_prices(tickers):
-    """pykrx 로 당일(또는 최근 영업일) 일봉을 가져와 prices upsert."""
+def fetch_latest_price(symbol: str):
+    """pykrx 로 최근 영업일 일봉 1건을 반환. (DB 접근 없음 — 단독 검증 가능)
+
+    주말·공휴일에는 당일 데이터가 없으므로 최근 PRICE_LOOKBACK_DAYS 일을
+    조회해 마지막(가장 최근) 영업일 행을 사용한다. 날짜는 TODAY 가 아니라
+    실제 체결일(DataFrame 인덱스)을 쓴다.
+    반환: {"date","close","change_pct","volume"} 또는 None(데이터 없음).
+    """
     from pykrx import stock
-    ymd = TODAY.strftime("%Y%m%d")
+    frm = (TODAY - timedelta(days=PRICE_LOOKBACK_DAYS)).strftime("%Y%m%d")
+    to  = TODAY.strftime("%Y%m%d")
+    df = stock.get_market_ohlcv(frm, to, symbol)
+    if df is None or df.empty:
+        return None
+    r = df.iloc[-1]
+    trade_date = df.index[-1].date()   # 실제 체결일 (당일이 아닐 수 있음)
+    return {
+        "date":       trade_date.isoformat(),
+        "close":      float(r["종가"]),
+        "change_pct": float(r.get("등락률", 0.0)),
+        "volume":     int(r["거래량"]),
+    }
+
+
+def collect_prices(tickers):
+    """각 종목의 최근 영업일 일봉을 prices 에 upsert."""
     rows = []
     for t in tickers:
         try:
-            df = stock.get_market_ohlcv_by_date(ymd, ymd, t["symbol"])
-            if df.empty:
+            price = fetch_latest_price(t["symbol"])
+            if price is None:
+                print(f"[price] {t['symbol']} 데이터 없음(휴장/미상장) 스킵")
                 continue
-            r = df.iloc[-1]
-            rows.append({
-                "ticker_id":  t["id"],
-                "date":       TODAY.isoformat(),
-                "close":      float(r["종가"]),
-                "change_pct": float(r.get("등락률", 0.0)),
-                "volume":     int(r["거래량"]),
-            })
+            rows.append({"ticker_id": t["id"], **price})
         except Exception as e:
             print(f"[price] {t['symbol']} 실패: {e}")
     if rows:
-        sb.table("prices").upsert(rows, on_conflict="ticker_id,date").execute()
+        get_sb().table("prices").upsert(rows, on_conflict="ticker_id,date").execute()
     print(f"[price] {len(rows)}건 upsert")
 
 
@@ -78,6 +113,7 @@ def _hash(url: str) -> str:
 
 def collect_news(tickers):
     """종목 aliases 로 뉴스 검색, url_hash 로 dedup 후 새 기사만 반환."""
+    import requests
     headers = {
         "X-Naver-Client-Id":     os.environ["NAVER_CLIENT_ID"],
         "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"],
@@ -101,7 +137,7 @@ def collect_news(tickers):
             url = it.get("originallink") or it.get("link")
             h = _hash(url)
             # 이미 있으면 skip
-            exists = sb.table("news").select("id").eq("url_hash", h).execute()
+            exists = get_sb().table("news").select("id").eq("url_hash", h).execute()
             if exists.data:
                 continue
             new_items.append({
@@ -140,7 +176,7 @@ def enrich_news(items):
             f'제목: {it["title"]}\n요약: {it["_desc"]}'
         )
         try:
-            msg = ai.messages.create(
+            msg = get_ai().messages.create(
                 model=CHEAP_MODEL, max_tokens=300,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -161,7 +197,7 @@ def enrich_news(items):
             "summary":      data.get("summary", ""),
         })
     if enriched:
-        sb.table("news").upsert(enriched, on_conflict="url_hash").execute()
+        get_sb().table("news").upsert(enriched, on_conflict="url_hash").execute()
     print(f"[sentiment] {len(enriched)}건 처리")
 
 def _only_json(text: str) -> str:
@@ -175,7 +211,7 @@ def _only_json(text: str) -> str:
 def aggregate_and_signal(tickers):
     for t in tickers:
         # 오늘 뉴스 감정 모으기
-        today_news = sb.table("news").select("id,sentiment") \
+        today_news = get_sb().table("news").select("id,sentiment") \
             .eq("ticker_id", t["id"]) \
             .gte("published_at", TODAY.isoformat()) \
             .execute().data
@@ -188,13 +224,13 @@ def aggregate_and_signal(tickers):
 
         # 기준선 = 직전 BASELINE_DAYS 일 평균 (오늘 제외)
         since = (TODAY - timedelta(days=BASELINE_DAYS)).isoformat()
-        hist = sb.table("sentiment_daily").select("avg_sentiment") \
+        hist = get_sb().table("sentiment_daily").select("avg_sentiment") \
             .eq("ticker_id", t["id"]) \
             .gte("date", since).lt("date", TODAY.isoformat()) \
             .execute().data
         baseline = (sum(h["avg_sentiment"] for h in hist) / len(hist)) if hist else avg
 
-        sb.table("sentiment_daily").upsert({
+        get_sb().table("sentiment_daily").upsert({
             "ticker_id": t["id"], "date": TODAY.isoformat(),
             "avg_sentiment": avg, "news_count": len(sents), "baseline": baseline,
         }, on_conflict="ticker_id,date").execute()
@@ -204,7 +240,7 @@ def aggregate_and_signal(tickers):
         if len(sents) >= MIN_NEWS and abs(delta) >= THRESHOLD:
             stype = "sentiment_surge_pos" if delta > 0 else "sentiment_surge_neg"
             severity = "high" if abs(delta) >= 0.7 else "mid" if abs(delta) >= 0.5 else "low"
-            sb.table("signals").upsert({
+            get_sb().table("signals").upsert({
                 "ticker_id": t["id"], "date": TODAY.isoformat(),
                 "type": stype, "severity": severity,
                 "evidence": {"delta": round(delta, 3), "avg": round(avg, 3),
@@ -219,8 +255,8 @@ def aggregate_and_signal(tickers):
 # ======================================================================
 def build_report(tickers):
     """오늘 시그널 + 종목별 감정 집계만 근거로 리포트 생성."""
-    sigs = sb.table("signals").select("*").eq("date", TODAY.isoformat()).execute().data
-    daily = sb.table("sentiment_daily").select("*").eq("date", TODAY.isoformat()).execute().data
+    sigs = get_sb().table("signals").select("*").eq("date", TODAY.isoformat()).execute().data
+    daily = get_sb().table("sentiment_daily").select("*").eq("date", TODAY.isoformat()).execute().data
     name_of = {t["id"]: t["name"] for t in tickers}
 
     payload = {
@@ -237,12 +273,12 @@ def build_report(tickers):
         "각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
-    msg = ai.messages.create(
+    msg = get_ai().messages.create(
         model=REPORT_MODEL, max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
     body = msg.content[0].text
-    sb.table("reports").upsert({
+    get_sb().table("reports").upsert({
         "date": TODAY.isoformat(), "scope": "market", "body_md": body,
         "model": REPORT_MODEL,
         "source_refs": [s["id"] for s in sigs],
@@ -252,7 +288,7 @@ def build_report(tickers):
 
 # ======================================================================
 def main():
-    tickers = sb.table("tickers").select("*").eq("active", True).execute().data
+    tickers = get_sb().table("tickers").select("*").eq("active", True).execute().data
     if not tickers:
         print("워치리스트가 비어있음. tickers 테이블에 종목을 먼저 넣으세요.")
         return
