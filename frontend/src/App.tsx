@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from './api/client'
 import type { Report, Signal, TickerMetrics } from './api/client'
 import { DisclaimerBadge } from './components/DisclaimerBadge'
+import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
 import { ReportView } from './components/ReportView'
@@ -38,17 +39,21 @@ export default function App() {
 
   return (
     <div className="app">
-      <header className="header">
-        <h1>AI 시그널 리포트</h1>
+      <header>
+        <div className="brand-row">
+          <h1 className="title">AI 시그널 리포트</h1>
+          {report && <span className="date-pill">{report.date}</span>}
+        </div>
         <DisclaimerBadge />
+        <SummaryStrip signals={signals} tickerCount={TICKERS.length} />
       </header>
 
       <section className="section">
-        <h2>오늘의 시그널</h2>
+        <h2 className="section-title">오늘의 시그널</h2>
         {signals.length === 0 ? (
           <p className="empty">발화된 감정 급변 시그널이 없습니다.</p>
         ) : (
-          <div className="cards">
+          <div className="signal-grid">
             {signals.map((s, i) => (
               <SignalCard key={`${s.symbol}-${s.type}-${i}`} signal={s} />
             ))}
@@ -57,26 +62,28 @@ export default function App() {
       </section>
 
       <section className="section">
-        <h2>종목 추이 (종가 · 평균 감정)</h2>
-        <div className="tabs">
-          {TICKERS.map((t) => (
-            <button
-              key={t.symbol}
-              className={t.symbol === symbol ? 'tab active' : 'tab'}
-              onClick={() => setSymbol(t.symbol)}
-            >
-              {t.name}
-            </button>
-          ))}
+        <h2 className="section-title">종목 추이 (종가 · 평균 감정)</h2>
+        <div className="panel">
+          <div className="tabs">
+            {TICKERS.map((t) => (
+              <button
+                key={t.symbol}
+                className={t.symbol === symbol ? 'tab active' : 'tab'}
+                onClick={() => setSymbol(t.symbol)}
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+          {loadError && (
+            <p className="empty">데이터를 불러오지 못했습니다. (API 연결을 확인하세요)</p>
+          )}
+          <SentimentChart data={metrics?.series ?? []} />
         </div>
-        {loadError && (
-          <p className="empty">데이터를 불러오지 못했습니다. (API 연결을 확인하세요)</p>
-        )}
-        <SentimentChart data={metrics?.series ?? []} />
       </section>
 
       <section className="section">
-        <h2>일일 리포트</h2>
+        <h2 className="section-title">일일 리포트</h2>
         <ReportView report={report} />
       </section>
 
