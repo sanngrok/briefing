@@ -108,7 +108,9 @@ cd pipeline
 pip install -r requirements-dev.txt
 python -m pytest tests/ -v
 ```
-뉴스 파싱(`parse_news_item`)과 감정 JSON 파싱(`parse_sentiment`)을 순수 함수로 검증합니다.
+뉴스 파싱(`parse_news_item`)·감정 JSON 파싱(`parse_sentiment`)과
+시그널 판정(`decide_signal`/`classify_severity`/`compute_baseline`, §7 규칙)을
+순수 함수로 검증합니다. 경계값(임계치·최소 기사 수·심각도 구간)을 포함합니다.
 (네이버/Anthropic 실제 호출은 키 연동 후 파이프라인 전체 실행으로 확인)
 
 ---
@@ -121,7 +123,7 @@ python -m pytest tests/ -v
 | M1 | 스키마 적용 & 워치리스트 시드 | ✅ |
 | M2 | 시세 슬라이스 (pykrx 검증) | ✅ |
 | M3 | 뉴스 + 감정 슬라이스 | ✅ |
-| M4 | 집계 & 시그널 + 단위테스트 | ⬜ |
+| M4 | 집계 & 시그널 + 단위테스트 | ✅ |
 | M5 | 리포트 (그라운딩) | ⬜ |
 | M6 | FastAPI 서빙 레이어 | ⬜ |
 | M7 | 프론트엔드 (Recharts) | ⬜ |

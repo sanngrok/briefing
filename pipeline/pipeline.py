@@ -243,7 +243,38 @@ def _only_json(text: str) -> str:
 
 # ======================================================================
 # 4) 감정 일집계 + 5) 감정 급변 시그널
+#    판정 규칙(§7)은 아래 순수 함수로 분리해 단위 테스트로 고정한다.
 # ======================================================================
+def compute_baseline(history_avgs, today_avg):
+    """기준선 = 직전 N일 평균 감정. 히스토리가 없으면 today_avg 로 둔다.
+
+    초기 며칠은 히스토리가 없어 baseline==today_avg → delta 0 → 미발화(정상, §7).
+    """
+    return sum(history_avgs) / len(history_avgs) if history_avgs else today_avg
+
+
+def classify_severity(abs_delta):
+    """|delta| → 심각도. ≥0.7 high, ≥0.5 mid, 그 외 low."""
+    if abs_delta >= 0.7:
+        return "high"
+    if abs_delta >= 0.5:
+        return "mid"
+    return "low"
+
+
+def decide_signal(avg, baseline, news_count, *, min_news=MIN_NEWS, threshold=THRESHOLD):
+    """§7 규칙으로 감정 급변 시그널을 판정. (순수 함수)
+
+    발화 조건: news_count ≥ min_news  AND  |avg - baseline| ≥ threshold.
+    반환: 발화 시 {"type","severity","delta"}, 아니면 None.
+    """
+    delta = avg - baseline
+    if news_count < min_news or abs(delta) < threshold:
+        return None
+    stype = "sentiment_surge_pos" if delta > 0 else "sentiment_surge_neg"
+    return {"type": stype, "severity": classify_severity(abs(delta)), "delta": delta}
+
+
 def aggregate_and_signal(tickers):
     for t in tickers:
         # 오늘 뉴스 감정 모으기
@@ -251,9 +282,7 @@ def aggregate_and_signal(tickers):
             .eq("ticker_id", t["id"]) \
             .gte("published_at", TODAY.isoformat()) \
             .execute().data
-        if not today_news:
-            continue
-        sents = [n["sentiment"] for n in today_news if n["sentiment"] is not None]
+        sents = [n["sentiment"] for n in (today_news or []) if n["sentiment"] is not None]
         if not sents:
             continue
         avg = sum(sents) / len(sents)
@@ -264,26 +293,24 @@ def aggregate_and_signal(tickers):
             .eq("ticker_id", t["id"]) \
             .gte("date", since).lt("date", TODAY.isoformat()) \
             .execute().data
-        baseline = (sum(h["avg_sentiment"] for h in hist) / len(hist)) if hist else avg
+        baseline = compute_baseline([h["avg_sentiment"] for h in (hist or [])], avg)
 
         get_sb().table("sentiment_daily").upsert({
             "ticker_id": t["id"], "date": TODAY.isoformat(),
             "avg_sentiment": avg, "news_count": len(sents), "baseline": baseline,
         }, on_conflict="ticker_id,date").execute()
 
-        # 시그널 판정
-        delta = avg - baseline
-        if len(sents) >= MIN_NEWS and abs(delta) >= THRESHOLD:
-            stype = "sentiment_surge_pos" if delta > 0 else "sentiment_surge_neg"
-            severity = "high" if abs(delta) >= 0.7 else "mid" if abs(delta) >= 0.5 else "low"
+        # 시그널 판정 (순수 함수)
+        decision = decide_signal(avg, baseline, len(sents))
+        if decision:
             get_sb().table("signals").upsert({
                 "ticker_id": t["id"], "date": TODAY.isoformat(),
-                "type": stype, "severity": severity,
-                "evidence": {"delta": round(delta, 3), "avg": round(avg, 3),
+                "type": decision["type"], "severity": decision["severity"],
+                "evidence": {"delta": round(decision["delta"], 3), "avg": round(avg, 3),
                              "baseline": round(baseline, 3), "news_count": len(sents),
                              "news_ids": [n["id"] for n in today_news]},
             }, on_conflict="ticker_id,date,type").execute()
-            print(f"[signal] {t['symbol']} {stype} delta={delta:.2f}")
+            print(f"[signal] {t['symbol']} {decision['type']} delta={decision['delta']:.2f}")
 
 
 # ======================================================================
