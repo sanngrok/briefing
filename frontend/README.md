@@ -1,9 +1,19 @@
 # 레이어 C — 프론트엔드 (Vercel)
 
-M7 에서 구현합니다. React + TypeScript + Recharts.
+Vite + React + TypeScript + Recharts.
 
-구성:
-- Recharts 시계열 차트 (종가 · 감정 추이)
-- severity 색상별 시그널 카드 (low/mid/high)
-- react-markdown 리포트 뷰
-- **"투자 판단 근거 아님"** 면책 라벨 (필수)
+## 구성
+- `src/api/client.ts` — 백엔드 호출 + 응답 타입(Pydantic 계약과 일치)
+- `src/components/SentimentChart.tsx` — 종가·평균 감정 이중축 시계열 차트
+- `src/components/SignalCard.tsx` — severity(high/mid/low) 색상 카드
+- `src/components/ReportView.tsx` — react-markdown 리포트
+- `src/components/DisclaimerBadge.tsx` — "투자 판단 근거 아님" 라벨(§2)
+- `src/App.tsx` — 종목 탭 전환 + 데이터 로딩/에러 처리
+
+## 실행
+```bash
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # 타입체크 + dist/
+```
+환경변수 `VITE_API_BASE`(기본 `http://127.0.0.1:8000`).

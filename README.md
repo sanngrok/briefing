@@ -139,6 +139,22 @@ python -m pytest api/tests -v      # Supabase 없이 라우팅·검증·404/422 
 
 ---
 
+## 프론트엔드 (레이어 C, Vercel)
+
+Vite + React + TypeScript + Recharts. severity 색상 시그널 카드 + 종가·감정 시계열 차트 +
+react-markdown 리포트 + "투자 판단 근거 아님" 라벨(하드룰 §2).
+
+```bash
+cd frontend
+npm install
+npm run dev        # http://localhost:5173 (개발 서버)
+npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
+```
+> 환경변수 `VITE_API_BASE` 로 백엔드 주소 주입(기본 `http://127.0.0.1:8000`).
+> 백엔드가 없어도 앱은 기동하며 각 섹션은 빈 상태/에러 안내로 gracefully 처리됩니다.
+
+---
+
 ## 개발 로드맵 (마일스톤)
 
 | # | 내용 | 상태 |
@@ -150,7 +166,7 @@ python -m pytest api/tests -v      # Supabase 없이 라우팅·검증·404/422 
 | M4 | 집계 & 시그널 + 단위테스트 | ✅ |
 | M5 | 리포트 (그라운딩) | ✅ |
 | M6 | FastAPI 서빙 레이어 | ✅ |
-| M7 | 프론트엔드 (Recharts) | ⬜ |
+| M7 | 프론트엔드 (Recharts) | ✅ |
 | M8 | GitHub Actions 워크플로우 | ⬜ |
 | M9 | 배포 (Fly/Render + Vercel) | ⬜ |
 

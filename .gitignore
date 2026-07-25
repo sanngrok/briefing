@@ -20,6 +20,10 @@ build/
 .next/
 .vercel/
 *.log
+*.tsbuildinfo
+# tsc -b 가 vite.config.ts 에서 생성하는 부산물
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # --- OS / Editor ---
 .DS_Store
