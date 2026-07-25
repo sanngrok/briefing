@@ -60,6 +60,23 @@ briefing/
 
 ---
 
+## DB 준비 (M1)
+
+1. **스키마 적용** — Supabase 프로젝트에서 아래 중 한 방법으로 [db/schema.sql](db/schema.sql) 실행:
+   - Supabase 대시보드 → **SQL Editor** → `schema.sql` 내용 붙여넣기 → Run
+   - 또는 psql: `psql "<connection-string>" -f db/schema.sql`
+   - `create table if not exists` 라서 여러 번 실행해도 안전합니다.
+2. **워치리스트 시드** — 환경변수(`SUPABASE_URL`, `SUPABASE_KEY`) 설정 후:
+   ```bash
+   cd pipeline
+   python seed_tickers.py
+   ```
+   - `symbol` UNIQUE 기준 upsert → **재실행해도 중복이 쌓이지 않습니다**(멱등).
+   - 기본 시드: 삼성전자(005930) · SK하이닉스(000660) · NAVER(035420) · 카카오(035720).
+   - 종목을 바꾸려면 `seed_tickers.py` 의 `SEED_TICKERS` 를 수정하세요.
+
+---
+
 ## 로컬 실행 (파이프라인)
 
 ```bash
@@ -83,7 +100,7 @@ python pipeline.py
 | # | 내용 | 상태 |
 |---|---|---|
 | M0 | 프로젝트 스캐폴딩 & 시크릿 골격 | ✅ |
-| M1 | 스키마 적용 & 워치리스트 시드 | ⬜ |
+| M1 | 스키마 적용 & 워치리스트 시드 | ✅ |
 | M2 | 시세 슬라이스 (pykrx 검증) | ⬜ |
 | M3 | 뉴스 + 감정 슬라이스 | ⬜ |
 | M4 | 집계 & 시그널 + 단위테스트 | ⬜ |
