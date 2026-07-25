@@ -316,35 +316,67 @@ def aggregate_and_signal(tickers):
 # ======================================================================
 # 6) LLM 리포트 (그라운딩)
 # ======================================================================
+# 하드룰 §2: 리포트에 투자 자문이 아님을 명시. LLM 출력에 의존하지 않고
+# 결정론적으로 부착한다.
+REPORT_DISCLAIMER = (
+    "> ⚠️ 본 리포트는 공개 데이터 기반의 정보 제공 목적이며, 투자 판단의 근거가 아닙니다."
+)
+
+
+def build_report_payload(signals_rows, daily_rows, name_of, report_date):
+    """리포트 LLM 에 넘길 근거 payload. 조회된 실제 행만으로 구성한다(그라운딩). (순수 함수)
+
+    - signals: evidence(jsonb) 를 펼쳐 delta/avg/baseline/news_count 등을 노출.
+    - sentiment: 종목별 일집계.
+    - 데이터에 없는 값은 만들지 않는다.
+    """
+    return {
+        "date": report_date,
+        "signals": [
+            {"name": name_of.get(s["ticker_id"]), "type": s["type"],
+             "severity": s["severity"], **(s.get("evidence") or {})}
+            for s in (signals_rows or [])
+        ],
+        "sentiment": [
+            {"name": name_of.get(d["ticker_id"]), "avg": d["avg_sentiment"],
+             "baseline": d["baseline"], "news_count": d["news_count"]}
+            for d in (daily_rows or [])
+        ],
+    }
+
+
+def build_report_prompt(payload):
+    """그라운딩 프롬프트. 제공된 JSON 외의 수치·전망을 금지한다. (순수 함수)"""
+    return (
+        "너는 시장 뉴스 감정 브리핑을 쓰는 애널리스트다. "
+        "아래 JSON 데이터만 근거로 한국어 마크다운 리포트를 작성하라.\n"
+        "규칙:\n"
+        "- 데이터에 없는 수치·전망·목표가·투자의견은 절대 쓰지 마라.\n"
+        "- 각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n"
+        "- 발화된 시그널이 없으면 '오늘은 감정 급변 시그널이 없습니다'라고 명시하라.\n"
+        "- 매수/매도 등 투자 권유 표현을 쓰지 마라.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
 def build_report(tickers):
     """오늘 시그널 + 종목별 감정 집계만 근거로 리포트 생성."""
     sigs = get_sb().table("signals").select("*").eq("date", TODAY.isoformat()).execute().data
     daily = get_sb().table("sentiment_daily").select("*").eq("date", TODAY.isoformat()).execute().data
     name_of = {t["id"]: t["name"] for t in tickers}
 
-    payload = {
-        "date": TODAY.isoformat(),
-        "signals": [{"name": name_of.get(s["ticker_id"]), "type": s["type"],
-                     "severity": s["severity"], **s["evidence"]} for s in sigs],
-        "sentiment": [{"name": name_of.get(d["ticker_id"]),
-                       "avg": d["avg_sentiment"], "baseline": d["baseline"],
-                       "news_count": d["news_count"]} for d in daily],
-    }
-    prompt = (
-        "너는 시장 뉴스 감정 브리핑을 쓰는 애널리스트다. 아래 JSON 데이터만 근거로 "
-        "한국어 마크다운 리포트를 작성하라. 데이터에 없는 수치·전망·투자의견은 절대 쓰지 마라. "
-        "각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False)}"
-    )
+    payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
+    prompt = build_report_prompt(payload)
     msg = get_ai().messages.create(
         model=REPORT_MODEL, max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
-    body = msg.content[0].text
+    # §2 면책 라벨을 결정론적으로 부착
+    body = msg.content[0].text.rstrip() + "\n\n" + REPORT_DISCLAIMER
     get_sb().table("reports").upsert({
         "date": TODAY.isoformat(), "scope": "market", "body_md": body,
         "model": REPORT_MODEL,
-        "source_refs": [s["id"] for s in sigs],
+        "source_refs": [s["id"] for s in (sigs or [])],
     }, on_conflict="date,scope").execute()
     print("[report] 생성 완료")
 

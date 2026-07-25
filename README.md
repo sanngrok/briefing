@@ -124,7 +124,7 @@ python -m pytest tests/ -v
 | M2 | 시세 슬라이스 (pykrx 검증) | ✅ |
 | M3 | 뉴스 + 감정 슬라이스 | ✅ |
 | M4 | 집계 & 시그널 + 단위테스트 | ✅ |
-| M5 | 리포트 (그라운딩) | ⬜ |
+| M5 | 리포트 (그라운딩) | ✅ |
 | M6 | FastAPI 서빙 레이어 | ⬜ |
 | M7 | 프론트엔드 (Recharts) | ⬜ |
 | M8 | GitHub Actions 워크플로우 | ⬜ |
