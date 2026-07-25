@@ -115,6 +115,30 @@ python -m pytest tests/ -v
 
 ---
 
+## 서빙 API (레이어 B, 읽기 전용)
+
+FastAPI. Supabase 를 **읽기만** 하며 CORS 는 프론트 도메인만, GET 만 노출합니다.
+
+**엔드포인트**
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/health` | 헬스체크 |
+| GET | `/api/reports/latest` | 최신 리포트 |
+| GET | `/api/reports/{date}` | 특정일 리포트 |
+| GET | `/api/tickers/{symbol}/metrics?from=&to=` | 종목 시세·감정 시계열 |
+| GET | `/api/signals?date=&severity=` | 시그널 목록(필터) |
+
+**로컬 실행 / 테스트**
+```bash
+pip install -r api/requirements-dev.txt
+uvicorn api.main:app --reload      # http://127.0.0.1:8000/docs (Swagger)
+python -m pytest api/tests -v      # Supabase 없이 라우팅·검증·404/422 검증
+```
+> 환경변수: `SUPABASE_URL`, `SUPABASE_KEY`(읽기=anon 권장), `CORS_ORIGINS`(콤마 구분).
+> 테스트는 `dependency_overrides` 로 가짜 repo 를 주입해 실제 DB 없이 돌아갑니다.
+
+---
+
 ## 개발 로드맵 (마일스톤)
 
 | # | 내용 | 상태 |
@@ -125,7 +149,7 @@ python -m pytest tests/ -v
 | M3 | 뉴스 + 감정 슬라이스 | ✅ |
 | M4 | 집계 & 시그널 + 단위테스트 | ✅ |
 | M5 | 리포트 (그라운딩) | ✅ |
-| M6 | FastAPI 서빙 레이어 | ⬜ |
+| M6 | FastAPI 서빙 레이어 | ✅ |
 | M7 | 프론트엔드 (Recharts) | ⬜ |
 | M8 | GitHub Actions 워크플로우 | ⬜ |
 | M9 | 배포 (Fly/Render + Vercel) | ⬜ |
