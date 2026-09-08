@@ -66,17 +66,24 @@ def get_ai():
 
 
 def _generate_text(model: str, prompt: str, max_tokens: int) -> str:
-    """Gemini generate_content 호출 후 텍스트만 반환. (호출부 공통 헬퍼)"""
+    """Gemini generate_content 호출 후 텍스트만 반환. (호출부 공통 헬퍼)
+
+    Gemini 3.x 는 내부 '생각(thinking)' 토큰도 max_output_tokens 를 함께 소진한다.
+    이걸 thinking_config 로 끄는 건 모델마다 지원이 갈리므로(flash-lite 는 budget=0 을
+    400 으로 거부) 설정을 건드리지 않고 출력 한도를 넉넉히 잡아 답변이 잘리지 않게 한다.
+    빈 응답은 조용히 넘기지 않고 예외로 올려 호출부가 알아채게 한다.
+    """
     from google.genai import types
     resp = get_ai().models.generate_content(
         model=model,
         contents=prompt,
-        config=types.GenerateContentConfig(
-            max_output_tokens=max_tokens,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
+        config=types.GenerateContentConfig(max_output_tokens=max_tokens),
     )
-    return resp.text
+    text = resp.text
+    if not text or not text.strip():
+        reason = getattr(resp.candidates[0], "finish_reason", None) if resp.candidates else None
+        raise RuntimeError(f"빈 응답 (finish_reason={reason}, model={model})")
+    return text
 
 
 # ======================================================================
@@ -230,7 +237,8 @@ def enrich_news(items):
             f'제목: {it["title"]}\n요약: {it["_desc"]}'
         )
         try:
-            text = _generate_text(CHEAP_MODEL, prompt, max_tokens=300)
+            # thinking 토큰이 한도를 나눠 쓰므로 짧은 JSON 이어도 여유를 둔다
+            text = _generate_text(CHEAP_MODEL, prompt, max_tokens=1000)
             data = parse_sentiment(text)
         except Exception as e:
             print(f"[sentiment] 실패, 중립 처리: {e}")
@@ -382,7 +390,7 @@ def build_report(tickers):
 
     payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
     prompt = build_report_prompt(payload)
-    text = _generate_text(REPORT_MODEL, prompt, max_tokens=1500)
+    text = _generate_text(REPORT_MODEL, prompt, max_tokens=6000)
     # §2 면책 라벨을 결정론적으로 부착
     body = text.rstrip() + "\n\n" + REPORT_DISCLAIMER
     get_sb().table("reports").upsert({
