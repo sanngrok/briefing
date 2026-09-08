@@ -19,31 +19,38 @@ import os
 import sys
 
 # ---- 시드 종목 -------------------------------------------------------
-# aliases: 네이버 뉴스 검색에 쓸 회사명/약칭. 첫 항목이 기본 검색어로 쓰인다.
+# 선정 기준: KRX 시가총액 상위 20 (우선주 제외 — 본주와 뉴스가 중복되므로).
+# 기준일 2026-09-08, 네이버 금융 시가총액 순위 기준.
+#   갱신 방법: pykrx 의 시총/전종목 API 는 현재 KRX 응답 변경으로 동작하지 않는다
+#   (개별 종목 시세만 정상). 순위는 네이버 금융 시가총액 페이지에서 확인해 갱신할 것.
+#
+# aliases[0] 이 뉴스 검색어로 쓰인다. 검색어는 반드시 실제 결과를 눈으로 확인하고
+# 넣을 것 — 회사와 무관한 기사가 섞이면 감정 점수가 통째로 오염된다.
 SEED_TICKERS = [
-    # 반도체·IT
-    {"symbol": "005930", "name": "삼성전자",       "aliases": ["삼성전자", "삼성", "Samsung Electronics"]},
-    {"symbol": "000660", "name": "SK하이닉스",     "aliases": ["SK하이닉스", "하이닉스", "SK Hynix"]},
-    # 인터넷·플랫폼
-    {"symbol": "035420", "name": "NAVER",          "aliases": ["네이버", "NAVER", "네이버 주가"]},
-    {"symbol": "035720", "name": "카카오",         "aliases": ["카카오", "Kakao", "카카오 주가"]},
-    {"symbol": "259960", "name": "크래프톤",       "aliases": ["크래프톤", "KRAFTON", "배틀그라운드"]},
-    # 2차전지·화학
-    {"symbol": "373220", "name": "LG에너지솔루션", "aliases": ["LG에너지솔루션", "LG엔솔", "LG Energy Solution"]},
-    {"symbol": "006400", "name": "삼성SDI",        "aliases": ["삼성SDI", "삼성 SDI"]},
-    {"symbol": "051910", "name": "LG화학",         "aliases": ["LG화학", "LG Chem"]},
-    # 바이오·헬스케어
+    {"symbol": "005930", "name": "삼성전자",         "aliases": ["삼성전자", "Samsung Electronics"]},
+    {"symbol": "000660", "name": "SK하이닉스",       "aliases": ["SK하이닉스", "하이닉스", "SK Hynix"]},
+    {"symbol": "402340", "name": "SK스퀘어",         "aliases": ["SK스퀘어", "SK Square"]},
+    {"symbol": "009150", "name": "삼성전기",         "aliases": ["삼성전기", "Samsung Electro-Mechanics"]},
+    {"symbol": "373220", "name": "LG에너지솔루션",   "aliases": ["LG에너지솔루션", "LG엔솔"]},
+    {"symbol": "005380", "name": "현대차",           "aliases": ["현대차", "현대자동차", "Hyundai Motor"]},
     {"symbol": "207940", "name": "삼성바이오로직스", "aliases": ["삼성바이오로직스", "삼성바이오"]},
-    {"symbol": "068270", "name": "셀트리온",       "aliases": ["셀트리온", "Celltrion"]},
-    # 자동차
-    {"symbol": "005380", "name": "현대차",         "aliases": ["현대차", "현대자동차", "Hyundai Motor"]},
-    {"symbol": "000270", "name": "기아",           "aliases": ["기아", "기아차", "Kia"]},
-    # 철강·조선·방산
-    {"symbol": "005490", "name": "POSCO홀딩스",    "aliases": ["POSCO홀딩스", "포스코홀딩스", "포스코"]},
+    {"symbol": "028260", "name": "삼성물산",         "aliases": ["삼성물산"]},
+    {"symbol": "105560", "name": "KB금융",           "aliases": ["KB금융", "KB금융지주"]},
+    {"symbol": "032830", "name": "삼성생명",         "aliases": ["삼성생명"]},
+    {"symbol": "034020", "name": "두산에너빌리티",   "aliases": ["두산에너빌리티"]},
+    {"symbol": "055550", "name": "신한지주",         "aliases": ["신한지주", "신한금융지주"]},
     {"symbol": "012450", "name": "한화에어로스페이스", "aliases": ["한화에어로스페이스", "한화에어로"]},
-    # 금융
-    {"symbol": "105560", "name": "KB금융",         "aliases": ["KB금융", "KB금융지주", "국민은행"]},
-    {"symbol": "055550", "name": "신한지주",       "aliases": ["신한지주", "신한금융", "신한금융지주"]},
+    # "기아"는 야구단(기아 타이거즈) 기사가 섞여 자동차 회사로 좁혀지는 "기아차"를 쓴다.
+    {"symbol": "000270", "name": "기아",             "aliases": ["기아차", "기아 자동차", "Kia"]},
+    {"symbol": "329180", "name": "HD현대중공업",     "aliases": ["HD현대중공업", "현대중공업"]},
+    # SK㈜는 지주회사라 어떤 검색어를 써도 SK하이닉스·SK이노베이션 등 계열사 기사가
+    # 주로 잡힌다(깨끗한 검색어가 없음). 지주사 특성상 그룹 뉴스가 주가에 실제로
+    # 반영되는 면은 있으나, 이 종목의 감정 점수는 계열사와 상관이 높다는 한계가 있다.
+    {"symbol": "034730", "name": "SK",               "aliases": ["SK그룹", "SK 지주회사"]},
+    {"symbol": "006400", "name": "삼성SDI",          "aliases": ["삼성SDI", "삼성 SDI"]},
+    {"symbol": "068270", "name": "셀트리온",         "aliases": ["셀트리온", "Celltrion"]},
+    {"symbol": "086790", "name": "하나금융지주",     "aliases": ["하나금융지주", "하나금융"]},
+    {"symbol": "012330", "name": "현대모비스",       "aliases": ["현대모비스", "Hyundai Mobis"]},
 ]
 
 
@@ -67,11 +74,20 @@ def main():
     sb = create_client(url, key)
 
     # symbol UNIQUE 기준 upsert -> 재실행해도 중복 없음(멱등)
-    sb.table("tickers").upsert(SEED_TICKERS, on_conflict="symbol").execute()
+    rows = [{**t, "active": True} for t in SEED_TICKERS]
+    sb.table("tickers").upsert(rows, on_conflict="symbol").execute()
     print(f"[seed] {len(SEED_TICKERS)}개 종목 upsert 완료")
 
+    # 목록에서 빠진 종목은 비활성화한다. 행을 지우면 과거 시세·뉴스(FK)까지
+    # 잃으므로 active=False 로만 내려 히스토리는 남긴다.
+    keep = [t["symbol"] for t in SEED_TICKERS]
+    dropped = (sb.table("tickers").update({"active": False})
+               .eq("active", True).not_.in_("symbol", keep).execute().data)
+    if dropped:
+        print(f"[seed] 목록에서 빠져 비활성화: {', '.join(d['name'] for d in dropped)}")
+
     # 확인용: active 종목 목록 출력
-    rows = sb.table("tickers").select("symbol,name,active").order("symbol").execute().data
+    rows = sb.table("tickers").select("symbol,name,active").order("id").execute().data
     for r in rows:
         flag = "on" if r["active"] else "off"
         print(f"  - {r['symbol']} {r['name']} ({flag})")

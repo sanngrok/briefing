@@ -39,6 +39,21 @@ export interface Ticker {
   name: string
 }
 
+export interface Mover {
+  symbol: string
+  name: string
+  date: string
+  close?: number | null
+  change_pct?: number | null
+  volume?: number | null
+}
+
+export interface Movers {
+  date?: string | null
+  gainers: Mover[]
+  losers: Mover[]
+}
+
 export interface NewsItem {
   title: string
   url?: string | null
@@ -63,6 +78,14 @@ export const api = {
   latestReport: () => get<Report>('/api/reports/latest'),
 
   tickers: () => get<Ticker[]>('/api/tickers'),
+
+  movers: (params?: { date?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.date) q.set('date', params.date)
+    if (params?.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return get<Movers>(`/api/movers${qs ? `?${qs}` : ''}`)
+  },
 
   news: (params?: { symbol?: string; date?: string; limit?: number }) => {
     const q = new URLSearchParams()

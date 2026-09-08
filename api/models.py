@@ -39,6 +39,22 @@ class NewsItem(BaseModel):
     name: Optional[str] = None
 
 
+class Mover(BaseModel):
+    """급등락 종목 한 건 (특정 일자 기준)."""
+    symbol: str
+    name: str
+    date: Date
+    close: Optional[float] = None
+    change_pct: Optional[float] = None
+    volume: Optional[int] = None
+
+
+class Movers(BaseModel):
+    date: Optional[Date] = None
+    gainers: list[Mover] = []   # 상승률 상위 (내림차순)
+    losers: list[Mover] = []    # 하락률 상위 (오름차순)
+
+
 class MetricPoint(BaseModel):
     date: Date
     close: Optional[float] = None

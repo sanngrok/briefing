@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.db import get_repo
-from api.services import merge_metric_series, rank_news, to_signal
+from api.services import merge_metric_series, rank_news, split_movers, to_signal
 
 
 class FakeRepo:
@@ -29,6 +29,21 @@ class FakeRepo:
 
     def ticker_by_symbol(self, symbol):
         return {"id": 1, "symbol": "005930", "name": "삼성전자"} if symbol == "005930" else None
+
+    def latest_price_date(self):
+        return "2026-07-24"
+
+    def prices_on(self, date):
+        return [
+            {"date": date, "close": 100, "change_pct": 3.1, "volume": 10,
+             "tickers": {"symbol": "005930", "name": "삼성전자"}},
+            {"date": date, "close": 200, "change_pct": -5.4, "volume": 20,
+             "tickers": {"symbol": "000660", "name": "SK하이닉스"}},
+            {"date": date, "close": 300, "change_pct": 7.2, "volume": 30,
+             "tickers": {"symbol": "035420", "name": "NAVER"}},
+            {"date": date, "close": 400, "change_pct": 0.0, "volume": 40,
+             "tickers": {"symbol": "035720", "name": "카카오"}},
+        ]
 
     def news(self, ticker_id=None, frm=None, to=None, limit=120):
         rows = [
@@ -119,6 +134,28 @@ def test_news_limit_out_of_range_422():
     assert client.get("/api/news", params={"limit": 0}).status_code == 422
 
 
+# --- movers ----------------------------------------------------------
+def test_movers_splits_gainers_and_losers():
+    r = client.get("/api/movers")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["date"] == "2026-07-24"
+    # 상승은 높은 순, 하락은 낮은 순
+    assert [g["name"] for g in body["gainers"]] == ["NAVER", "삼성전자"]
+    assert [l["name"] for l in body["losers"]] == ["SK하이닉스"]
+    # 보합(0%)은 어느 쪽에도 들어가지 않는다
+    assert all(m["name"] != "카카오" for m in body["gainers"] + body["losers"])
+
+
+def test_movers_limit_applied():
+    body = client.get("/api/movers", params={"limit": 1}).json()
+    assert len(body["gainers"]) == 1 and body["gainers"][0]["name"] == "NAVER"
+
+
+def test_movers_limit_out_of_range_422():
+    assert client.get("/api/movers", params={"limit": 99}).status_code == 422
+
+
 # --- tickers/metrics -------------------------------------------------
 def test_metrics_merges_price_and_sentiment():
     r = client.get("/api/tickers/005930/metrics")
@@ -183,6 +220,19 @@ def test_rank_news_pure_orders_by_strength_and_handles_nulls():
     )
     assert [n["title"] for n in out] == ["c", "a", "b"]
     assert out[1]["issue_tags"] == [] and out[1]["symbol"] is None
+
+
+def test_split_movers_pure_ignores_missing_change():
+    out = split_movers(
+        [
+            {"date": "2026-07-24", "change_pct": None, "tickers": {"symbol": "a", "name": "A"}},
+            {"date": "2026-07-24", "change_pct": -1.0, "tickers": {"symbol": "b", "name": "B"}},
+            {"date": "2026-07-24", "change_pct": 2.0, "tickers": {"symbol": "c", "name": "C"}},
+        ],
+        limit=5,
+    )
+    assert [m["name"] for m in out["gainers"]] == ["C"]
+    assert [m["name"] for m in out["losers"]] == ["B"]   # change_pct 없는 A 는 제외
 
 
 def test_rank_news_coerces_bad_tags():

@@ -23,6 +23,34 @@ def merge_metric_series(prices: list, sentiment: list) -> list:
     return [by_date[d] for d in sorted(by_date)]
 
 
+def to_mover(row: dict) -> dict:
+    """prices row(+임베딩 tickers)를 Mover 응답 형태로 변환."""
+    ticker = row.get("tickers") or {}
+    return {
+        "symbol": ticker.get("symbol", ""),
+        "name": ticker.get("name", ""),
+        "date": row["date"],
+        "close": row.get("close"),
+        "change_pct": row.get("change_pct"),
+        "volume": row.get("volume"),
+    }
+
+
+def split_movers(rows: list, limit: int) -> dict:
+    """등락률 기준으로 상승/하락 상위를 나눈다. (순수 함수)
+
+    change_pct 가 없는 종목과 보합(0)은 어느 쪽에도 넣지 않는다.
+    gainers 는 높은 순, losers 는 낮은 순으로 각각 limit 건.
+    """
+    items = [to_mover(r) for r in rows or []]
+    scored = [m for m in items if m["change_pct"] is not None]
+    gainers = sorted([m for m in scored if m["change_pct"] > 0],
+                     key=lambda m: m["change_pct"], reverse=True)[:limit]
+    losers = sorted([m for m in scored if m["change_pct"] < 0],
+                    key=lambda m: m["change_pct"])[:limit]
+    return {"gainers": gainers, "losers": losers}
+
+
 def to_news_item(row: dict) -> dict:
     """news row(+임베딩 tickers)를 NewsItem 응답 형태로 변환."""
     ticker = row.get("tickers") or {}

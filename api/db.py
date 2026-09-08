@@ -57,13 +57,30 @@ class ReadRepo:
             q = q.lte("date", to)
         return q.order("date").execute().data
 
+    def latest_price_date(self) -> Optional[str]:
+        """시세가 존재하는 가장 최근 날짜(휴장일이면 직전 영업일이 잡힌다)."""
+        r = (self._sb.table("prices").select("date")
+             .order("date", desc=True).limit(1).execute())
+        return r.data[0]["date"] if r.data else None
+
+    def prices_on(self, date: str) -> list:
+        """특정 일자 전 종목 시세. 활성 종목만(비활성은 워치리스트에서 빠진 종목)."""
+        r = (self._sb.table("prices")
+             .select("date,close,change_pct,volume,tickers!inner(symbol,name,active)")
+             .eq("date", date).eq("tickers.active", True).execute())
+        return r.data or []
+
     # --- news ---
     def news(self, ticker_id: Optional[int] = None, frm: Optional[str] = None,
              to: Optional[str] = None, limit: int = 120) -> list:
-        """최근 기사(발행 최신순). tickers(symbol,name) 는 FK 임베딩(PostgREST)."""
+        """최근 기사(발행 최신순). tickers 는 FK 임베딩(PostgREST).
+
+        !inner + active 필터로 워치리스트에서 빠진 종목의 과거 기사는 제외한다.
+        """
         q = (self._sb.table("news")
              .select("title,url,source,published_at,sentiment,issue_tags,summary,"
-                     "tickers(symbol,name)"))
+                     "tickers!inner(symbol,name,active)")
+             .eq("tickers.active", True))
         if ticker_id:
             q = q.eq("ticker_id", ticker_id)
         if frm:

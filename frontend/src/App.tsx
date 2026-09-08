@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { api } from './api/client'
-import type { NewsItem, Report, Signal, Ticker, TickerMetrics } from './api/client'
+import type { Movers, NewsItem, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { DisclaimerBadge } from './components/DisclaimerBadge'
 import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
+import { MoversPanel } from './components/MoversPanel'
 import { NewsList } from './components/NewsList'
 import { ReportView } from './components/ReportView'
 
@@ -13,6 +14,7 @@ export default function App() {
   const [report, setReport] = useState<Report | null>(null)
   const [signals, setSignals] = useState<Signal[]>([])
   const [news, setNews] = useState<NewsItem[]>([])
+  const [movers, setMovers] = useState<Movers | null>(null)
   const [metrics, setMetrics] = useState<TickerMetrics | null>(null)
   const [symbol, setSymbol] = useState('')
   const [loadError, setLoadError] = useState(false)
@@ -29,6 +31,7 @@ export default function App() {
     api.latestReport().then(setReport).catch(() => setReport(null))
     api.signals().then(setSignals).catch(() => setSignals([]))
     api.news({ limit: 12 }).then(setNews).catch(() => setNews([]))
+    api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
   }, [])
 
   useEffect(() => {
@@ -59,6 +62,14 @@ export default function App() {
         <DisclaimerBadge />
         <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.length} />
       </header>
+
+      <section className="section">
+        <h2 className="section-title">
+          급등락 종목
+          <span className="section-hint">워치리스트 등락률 상위 · ±5% 이상은 급등락 표시</span>
+        </h2>
+        <MoversPanel movers={movers} />
+      </section>
 
       <section className="section">
         <h2 className="section-title">오늘의 시그널</h2>

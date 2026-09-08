@@ -182,7 +182,10 @@ def collect_news(tickers):
             resp = requests.get(
                 "https://naverapihub.apigw.ntruss.com/search/v1/news",
                 headers=headers,
-                params={"query": query, "display": NEWS_PER_TICKER, "sort": "date"},
+                # sort=date(최신순)는 검색어가 스치듯 언급된 무관한 기사까지 끌어온다
+                # (예: "삼성생명" → 후원 배드민턴 기사). 종목 감정 분석에는
+                # 관련도순(sim)이 훨씬 정확해서 sim 을 쓴다.
+                params={"query": query, "display": NEWS_PER_TICKER, "sort": "sim"},
                 timeout=10,
             )
             items = resp.json().get("items", [])
