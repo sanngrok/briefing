@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.db import get_repo
-from api.services import merge_metric_series, to_signal
+from api.services import merge_metric_series, rank_news, to_signal
 
 
 class FakeRepo:
@@ -23,8 +23,25 @@ class FakeRepo:
     def report_by_date(self, d):
         return self.latest_report() if d == "2026-07-24" else None
 
+    def tickers(self):
+        return [{"symbol": "005930", "name": "삼성전자"},
+                {"symbol": "000660", "name": "SK하이닉스"}]
+
     def ticker_by_symbol(self, symbol):
         return {"id": 1, "symbol": "005930", "name": "삼성전자"} if symbol == "005930" else None
+
+    def news(self, ticker_id=None, frm=None, to=None, limit=120):
+        rows = [
+            {"title": "약한 감정 기사", "url": "https://e.com/1", "source": "naver",
+             "published_at": "2026-07-24T10:00:00+09:00", "sentiment": 0.1,
+             "issue_tags": ["실적"], "summary": "요약1",
+             "tickers": {"symbol": "005930", "name": "삼성전자"}},
+            {"title": "강한 악재 기사", "url": "https://e.com/2", "source": "naver",
+             "published_at": "2026-07-24T09:00:00+09:00", "sentiment": -0.9,
+             "issue_tags": ["리콜"], "summary": "요약2",
+             "tickers": {"symbol": "005930", "name": "삼성전자"}},
+        ]
+        return rows[:limit]
 
     def prices(self, ticker_id, frm, to):
         return [{"date": "2026-07-24", "close": 249500, "change_pct": -7.59, "volume": 26175580}]
@@ -71,6 +88,35 @@ def test_report_by_date_not_found_404():
 
 def test_report_by_date_invalid_format_422():
     assert client.get("/api/reports/notadate").status_code == 422
+
+
+# --- tickers 목록 ----------------------------------------------------
+def test_list_tickers():
+    r = client.get("/api/tickers")
+    assert r.status_code == 200
+    assert [t["symbol"] for t in r.json()] == ["005930", "000660"]
+
+
+# --- news ------------------------------------------------------------
+def test_news_ranked_by_sentiment_strength():
+    r = client.get("/api/news")
+    assert r.status_code == 200
+    items = r.json()
+    # |sentiment| 가 큰 악재 기사가 앞으로
+    assert items[0]["title"] == "강한 악재 기사"
+    assert items[0]["symbol"] == "005930" and items[0]["issue_tags"] == ["리콜"]
+
+
+def test_news_limit_applied():
+    assert len(client.get("/api/news", params={"limit": 1}).json()) == 1
+
+
+def test_news_unknown_symbol_404():
+    assert client.get("/api/news", params={"symbol": "999999"}).status_code == 404
+
+
+def test_news_limit_out_of_range_422():
+    assert client.get("/api/news", params={"limit": 0}).status_code == 422
 
 
 # --- tickers/metrics -------------------------------------------------
@@ -124,3 +170,21 @@ def test_merge_metric_series_pure():
 def test_to_signal_without_embedding():
     s = to_signal({"date": "2026-07-24", "type": "x", "severity": "low"})
     assert s["symbol"] is None and s["evidence"] == {}
+
+
+def test_rank_news_pure_orders_by_strength_and_handles_nulls():
+    out = rank_news(
+        [
+            {"title": "a", "sentiment": 0.2},
+            {"title": "b", "sentiment": None},      # 감정 없음 → 0 취급, 뒤로
+            {"title": "c", "sentiment": -0.7},      # 부호와 무관하게 강도 우선
+        ],
+        limit=3,
+    )
+    assert [n["title"] for n in out] == ["c", "a", "b"]
+    assert out[1]["issue_tags"] == [] and out[1]["symbol"] is None
+
+
+def test_rank_news_coerces_bad_tags():
+    out = rank_news([{"title": "x", "sentiment": 0.1, "issue_tags": "리콜"}], limit=1)
+    assert out[0]["issue_tags"] == []   # list 가 아니면 빈 리스트

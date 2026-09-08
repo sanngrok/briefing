@@ -34,6 +34,23 @@ export interface Signal {
   evidence: Record<string, unknown>
 }
 
+export interface Ticker {
+  symbol: string
+  name: string
+}
+
+export interface NewsItem {
+  title: string
+  url?: string | null
+  source?: string | null
+  published_at?: string | null
+  sentiment?: number | null
+  issue_tags: string[]
+  summary?: string | null
+  symbol?: string | null
+  name?: string | null
+}
+
 const BASE = import.meta.env.VITE_API_BASE ?? 'http://127.0.0.1:8000'
 
 async function get<T>(path: string): Promise<T> {
@@ -44,6 +61,17 @@ async function get<T>(path: string): Promise<T> {
 
 export const api = {
   latestReport: () => get<Report>('/api/reports/latest'),
+
+  tickers: () => get<Ticker[]>('/api/tickers'),
+
+  news: (params?: { symbol?: string; date?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.symbol) q.set('symbol', params.symbol)
+    if (params?.date) q.set('date', params.date)
+    if (params?.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return get<NewsItem[]>(`/api/news${qs ? `?${qs}` : ''}`)
+  },
 
   signals: (params?: { date?: string; severity?: Severity }) => {
     const q = new URLSearchParams()

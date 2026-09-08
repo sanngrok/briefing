@@ -6,10 +6,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.db import ReadRepo, get_repo
-from api.models import TickerMetrics
+from api.models import Ticker, TickerMetrics
 from api.services import merge_metric_series
 
 router = APIRouter(prefix="/api/tickers", tags=["tickers"])
+
+
+@router.get("", response_model=list[Ticker])
+def list_tickers(repo: ReadRepo = Depends(get_repo)):
+    """활성 워치리스트. 프론트가 종목 탭을 하드코딩하지 않도록 여기서 받아간다."""
+    return repo.tickers()
 
 
 @router.get("/{symbol}/metrics", response_model=TickerMetrics)

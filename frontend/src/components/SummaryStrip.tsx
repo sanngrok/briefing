@@ -7,9 +7,11 @@ const LABEL: Record<Severity, string> = { low: '낮음', mid: '중간', high: '�
 export function SummaryStrip({
   signals,
   tickerCount,
+  newsCount,
 }: {
   signals: Signal[]
   tickerCount: number
+  newsCount: number
 }) {
   const total = signals.length
   const neg = signals.filter((s) => s.type.includes('neg')).length
@@ -33,11 +35,21 @@ export function SummaryStrip({
       </div>
       <div className="kpi-card">
         <div className="kpi-label">급락 시그널</div>
-        <div className="kpi-value">{neg}</div>
+        <div className={`kpi-value ${neg > 0 ? 'sevtext-high' : ''}`}>{neg}</div>
       </div>
       <div className="kpi-card">
         <div className="kpi-label">추적 종목</div>
-        <div className="kpi-value">{tickerCount}</div>
+        <div className="kpi-value">
+          {tickerCount}
+          <span className="kpi-unit">개</span>
+        </div>
+      </div>
+      <div className="kpi-card">
+        <div className="kpi-label">주요 뉴스</div>
+        <div className="kpi-value">
+          {newsCount}
+          <span className="kpi-unit">건</span>
+        </div>
       </div>
     </div>
   )

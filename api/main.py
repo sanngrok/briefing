@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import reports, signals, tickers
+from api.routers import news, reports, signals, tickers
 
 app = FastAPI(
     title="AI 시그널 리포트 API",
@@ -34,3 +34,4 @@ def health():
 app.include_router(reports.router)
 app.include_router(tickers.router)
 app.include_router(signals.router)
+app.include_router(news.router)

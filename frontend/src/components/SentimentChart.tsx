@@ -11,11 +11,11 @@ import {
 } from 'recharts'
 import type { MetricPoint } from '../api/client'
 
-// 라이트/다크 양쪽에서 읽히는 중립 색상 (SVG 속성은 CSS 변수를 못 받으므로 고정값)
-const GRID = 'rgba(148,163,184,0.25)'
-const TICK = '#94a3b8'
-const PRICE = '#3b82f6'
-const SENT = '#22c55e'
+// SVG 속성은 CSS 변수를 못 받으므로 index.css 팔레트와 같은 값을 고정으로 둔다.
+const GRID = '#e8eaf0'
+const TICK = '#8b93a7'
+const PRICE = '#4f46e5' // --accent
+const SENT = '#0f9d76' // --pos
 
 export function SentimentChart({ data }: { data: MetricPoint[] }) {
   if (data.length === 0) {
@@ -35,7 +35,12 @@ export function SentimentChart({ data }: { data: MetricPoint[] }) {
           stroke={GRID}
         />
         <Tooltip
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: `1px solid ${GRID}` }}
+          contentStyle={{
+            fontSize: 12,
+            borderRadius: 10,
+            border: `1px solid ${GRID}`,
+            boxShadow: '0 4px 12px rgba(16,24,40,.08)',
+          }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         {/* 감정 중립선 */}

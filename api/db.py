@@ -28,6 +28,12 @@ class ReadRepo:
         return r.data[0] if r.data else None
 
     # --- tickers / metrics ---
+    def tickers(self) -> list:
+        """활성 워치리스트. id 순 = 시드 순서(섹터 묶음)를 유지한다."""
+        r = (self._sb.table("tickers").select("symbol,name")
+             .eq("active", True).order("id").execute())
+        return r.data or []
+
     def ticker_by_symbol(self, symbol: str) -> Optional[dict]:
         r = (self._sb.table("tickers").select("id,symbol,name")
              .eq("symbol", symbol).limit(1).execute())
@@ -50,6 +56,21 @@ class ReadRepo:
         if to:
             q = q.lte("date", to)
         return q.order("date").execute().data
+
+    # --- news ---
+    def news(self, ticker_id: Optional[int] = None, frm: Optional[str] = None,
+             to: Optional[str] = None, limit: int = 120) -> list:
+        """최근 기사(발행 최신순). tickers(symbol,name) 는 FK 임베딩(PostgREST)."""
+        q = (self._sb.table("news")
+             .select("title,url,source,published_at,sentiment,issue_tags,summary,"
+                     "tickers(symbol,name)"))
+        if ticker_id:
+            q = q.eq("ticker_id", ticker_id)
+        if frm:
+            q = q.gte("published_at", frm)
+        if to:
+            q = q.lt("published_at", to)
+        return q.order("published_at", desc=True).limit(limit).execute().data or []
 
     # --- signals ---
     def signals(self, date: Optional[str] = None, severity: Optional[str] = None) -> list:

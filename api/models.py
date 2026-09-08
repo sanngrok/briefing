@@ -21,6 +21,24 @@ class Report(BaseModel):
     created_at: Optional[str] = None
 
 
+class Ticker(BaseModel):
+    symbol: str
+    name: str
+
+
+class NewsItem(BaseModel):
+    title: str
+    url: Optional[str] = None
+    source: Optional[str] = None
+    published_at: Optional[str] = None
+    sentiment: Optional[float] = None
+    issue_tags: list[str] = []
+    summary: Optional[str] = None
+    # 종목(FK 임베딩)
+    symbol: Optional[str] = None
+    name: Optional[str] = None
+
+
 class MetricPoint(BaseModel):
     date: Date
     close: Optional[float] = None
