@@ -52,7 +52,7 @@ briefing/
 | 이름 | 용도 | 발급처 |
 |---|---|---|
 | `SUPABASE_URL` / `SUPABASE_KEY` | DB 저장/조회 | Supabase (파이프라인=service_role) |
-| `ANTHROPIC_API_KEY` | 감정분석/리포트 | Anthropic |
+| `GEMINI_API_KEY` | 감정분석/리포트 | Google AI Studio (무료 티어) |
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 뉴스 검색 | 네이버 개발자센터 |
 
 - 로컬: `.env.example` → `.env` 복사 후 값 입력 (`.env` 는 커밋 금지).
@@ -90,7 +90,7 @@ pip install -r requirements.txt
 python pipeline.py
 ```
 
-> 외부 클라이언트(Supabase/Anthropic)는 **지연 생성**되므로, 키가 없어도 개별 단계를
+> 외부 클라이언트(Supabase/Gemini)는 **지연 생성**되므로, 키가 없어도 개별 단계를
 > 검증할 수 있습니다. 예: 시세 수집은 키 없이 아래로 확인 가능합니다.
 
 **시세 수집 검증 (키 불필요, M2)**
@@ -111,7 +111,7 @@ python -m pytest tests/ -v
 뉴스 파싱(`parse_news_item`)·감정 JSON 파싱(`parse_sentiment`)과
 시그널 판정(`decide_signal`/`classify_severity`/`compute_baseline`, §7 규칙)을
 순수 함수로 검증합니다. 경계값(임계치·최소 기사 수·심각도 구간)을 포함합니다.
-(네이버/Anthropic 실제 호출은 키 연동 후 파이프라인 전체 실행으로 확인)
+(네이버/Gemini 실제 호출은 키 연동 후 파이프라인 전체 실행으로 확인)
 
 ---
 
@@ -164,7 +164,7 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 - **중복 방지**: `concurrency` 로 스케줄/수동이 겹쳐도 동시에 두 번 돌지 않음(멱등 안전).
 
 **필요한 repo Secrets** (Settings → Secrets and variables → Actions):
-`SUPABASE_URL`, `SUPABASE_KEY`(service_role), `ANTHROPIC_API_KEY`,
+`SUPABASE_URL`, `SUPABASE_KEY`(service_role), `GEMINI_API_KEY`,
 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`.
 
 > Secrets 등록 전에는 스케줄이 돌아도 파이프라인이 키 없음으로 실패합니다(정상).

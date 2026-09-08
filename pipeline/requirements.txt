@@ -1,4 +1,4 @@
 supabase>=2.0
-anthropic>=0.40
+google-genai>=0.3
 pykrx>=1.0.45
 requests>=2.31

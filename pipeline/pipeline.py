@@ -11,10 +11,10 @@ pipeline.py — 일일 파이프라인 (GitHub Actions cron 에서 실행)
 
 환경변수 (GitHub repo secrets 로 주입):
   SUPABASE_URL, SUPABASE_KEY        (service_role 키)
-  ANTHROPIC_API_KEY
+  GEMINI_API_KEY                    (Google AI Studio, 무료 티어)
   NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
 
-의존성: supabase, anthropic, pykrx, requests  (requirements.txt 참고)
+의존성: supabase, google-genai, pykrx, requests  (requirements.txt 참고)
 
 주의: pykrx / 네이버 API 응답 필드는 버전·정책에 따라 바뀔 수 있으니
       처음엔 종목 1~2개로 실제 응답을 print 해서 확인 후 매핑하세요.
@@ -24,6 +24,7 @@ import os
 import re
 import json
 import html
+import time
 import hashlib
 from datetime import date, datetime, timedelta
 
@@ -36,8 +37,9 @@ MIN_NEWS      = 3        # 시그널 발화 최소 기사 수
 THRESHOLD     = 0.40     # |오늘 감정 - 기준선| 이 값 이상이면 급변
 NEWS_PER_TICKER = 10     # 종목당 수집할 뉴스 개수
 PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 위한 조회 범위
-CHEAP_MODEL   = "claude-haiku-4-5-20251001"   # 감정/태그용
-REPORT_MODEL  = "claude-sonnet-5"             # 리포트용 (모델명은 현재 사용 가능 값으로)
+CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
+REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
+SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
 
 TODAY = date.today()
 
@@ -55,12 +57,26 @@ def get_sb():
     return _sb
 
 def get_ai():
-    """Anthropic 클라이언트. 최초 호출 시 생성."""
+    """Gemini 클라이언트. 최초 호출 시 생성."""
     global _ai
     if _ai is None:
-        import anthropic
-        _ai = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        from google import genai
+        _ai = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     return _ai
+
+
+def _generate_text(model: str, prompt: str, max_tokens: int) -> str:
+    """Gemini generate_content 호출 후 텍스트만 반환. (호출부 공통 헬퍼)"""
+    from google.genai import types
+    resp = get_ai().models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=max_tokens,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+    )
+    return resp.text
 
 
 # ======================================================================
@@ -148,8 +164,8 @@ def collect_news(tickers):
     """종목 aliases 로 뉴스 검색, url_hash 로 dedup 후 새 기사만 반환."""
     import requests
     headers = {
-        "X-Naver-Client-Id":     os.environ["NAVER_CLIENT_ID"],
-        "X-Naver-Client-Secret": os.environ["NAVER_CLIENT_SECRET"],
+        "X-NCP-APIGW-API-KEY-ID": os.environ["NAVER_CLIENT_ID"],
+        "X-NCP-APIGW-API-KEY":    os.environ["NAVER_CLIENT_SECRET"],
     }
     new_items = []
     seen = set()   # 이번 실행 안에서의 중복(같은 기사 다중 매칭) 방지
@@ -157,7 +173,7 @@ def collect_news(tickers):
         query = (t["aliases"] or [t["name"]])[0]
         try:
             resp = requests.get(
-                "https://openapi.naver.com/v1/search/news.json",
+                "https://naverapihub.apigw.ntruss.com/search/v1/news",
                 headers=headers,
                 params={"query": query, "display": NEWS_PER_TICKER, "sort": "date"},
                 timeout=10,
@@ -205,18 +221,17 @@ def parse_sentiment(text: str) -> dict:
 def enrich_news(items):
     """각 기사에 sentiment(-1~1), tags, 요약을 붙여 news upsert."""
     enriched = []
-    for it in items:
+    for idx, it in enumerate(items):
+        if idx > 0:
+            time.sleep(SENTIMENT_CALL_INTERVAL)
         prompt = (
             "다음 뉴스의 제목과 요약을 보고 JSON 만 출력하라. 다른 말 금지.\n"
             '형식: {"sentiment": -1.0~1.0, "tags": ["..."], "summary": "한 줄 한국어 요약"}\n'
             f'제목: {it["title"]}\n요약: {it["_desc"]}'
         )
         try:
-            msg = get_ai().messages.create(
-                model=CHEAP_MODEL, max_tokens=300,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            data = parse_sentiment(msg.content[0].text)
+            text = _generate_text(CHEAP_MODEL, prompt, max_tokens=300)
+            data = parse_sentiment(text)
         except Exception as e:
             print(f"[sentiment] 실패, 중립 처리: {e}")
             data = {"sentiment": 0.0, "tags": [], "summary": it["title"]}
@@ -367,12 +382,9 @@ def build_report(tickers):
 
     payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
     prompt = build_report_prompt(payload)
-    msg = get_ai().messages.create(
-        model=REPORT_MODEL, max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    text = _generate_text(REPORT_MODEL, prompt, max_tokens=1500)
     # §2 면책 라벨을 결정론적으로 부착
-    body = msg.content[0].text.rstrip() + "\n\n" + REPORT_DISCLAIMER
+    body = text.rstrip() + "\n\n" + REPORT_DISCLAIMER
     get_sb().table("reports").upsert({
         "date": TODAY.isoformat(), "scope": "market", "body_md": body,
         "model": REPORT_MODEL,
