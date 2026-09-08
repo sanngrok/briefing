@@ -27,6 +27,16 @@
 - **파이프라인(쓰기)** 과 **서빙 API(읽기)** 는 분리된 서비스로 배포합니다.
 - 무료 인스턴스가 슬립해도 스케줄 잡은 독립적으로 실행됩니다.
 
+### 배포 주소 (운영 중)
+
+| 레이어 | 위치 | 주소 |
+|---|---|---|
+| A. 파이프라인 | GitHub Actions | `.github/workflows/pipeline.yml` (평일 16:00 KST) |
+| B. 서빙 API | Render | https://briefing-6pzj.onrender.com ([/docs](https://briefing-6pzj.onrender.com/docs)) |
+| C. 프론트엔드 | Vercel | https://briefing-lake.vercel.app |
+
+> Render 무료 티어는 15분 미사용 시 슬립하므로, 첫 요청은 응답까지 30~60초 걸릴 수 있습니다.
+
 ---
 
 ## 저장소 구조
@@ -185,7 +195,7 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 | M6 | FastAPI 서빙 레이어 | ✅ |
 | M7 | 프론트엔드 (Recharts) | ✅ |
 | M8 | GitHub Actions 워크플로우 | ✅ |
-| M9 | 배포 (Fly/Render + Vercel) | ⬜ |
+| M9 | 배포 (Render + Vercel) | ✅ |
 
 ---
 

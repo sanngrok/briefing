@@ -1,15 +1,18 @@
 # 진행 상황 정리 (PROGRESS)
 
 > 금융/트렌드 AI 시그널 리포트 플랫폼 — 국내 주식 뉴스 감정 급변 시그널 대시보드
-> 최종 업데이트: 2026-07-25 · 리모트: `github.com/sanngrok/briefing` (main)
+> 최종 업데이트: 2026-09-08 · 리모트: `github.com/sanngrok/briefing` (main)
 
 ---
 
 ## 1. 한눈에 보기
 
-- **상태**: M0~M8 + UI 리디자인 완료. 코드/구조는 전부 준비됨.
-- **일시 중지 지점**: 실제 API 키(Supabase / Anthropic / 네이버) 연결 대기 중.
-- **방식**: "구조 우선, 키 연동 나중" — 키 없이 순수 함수·목(mock)으로 검증하며 진행.
+- **상태**: **M0~M9 전부 완료. 3개 레이어가 실제로 운영 중.**
+- **운영 주소**:
+  - 프론트: https://briefing-lake.vercel.app
+  - API: https://briefing-6pzj.onrender.com
+  - 파이프라인: GitHub Actions cron (평일 16:00 KST)
+- **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
 - **테스트**: 파이프라인 단위 테스트 36개 + API 테스트 13개, 모두 키 없이 통과.
 
 ---
@@ -71,14 +74,14 @@ briefing/
 | M7 | 프론트엔드 (Recharts) | ✅ | 대시보드, npm build 통과 |
 | M8 | GitHub Actions 워크플로우 | ✅ | `pipeline.yml`(cron 16:00 KST + 수동) |
 | — | UI 리디자인 (옵션 A) | ✅ | 요약 우선 KPI 대시보드, 라이트/다크 지원 |
-| **M9** | **배포** | ⬜ | **다음 단계 (아래 §7)** |
+| **M9** | **배포** | ✅ | Render(API) + Vercel(프론트) + Actions Secrets 등록·실행 검증 |
 
 ---
 
 ## 5. 레이어별 완성 내용
 
 ### 레이어 A — 파이프라인 (pipeline/)
-- 6단계: 시세(pykrx) → 뉴스(네이버) → 감정(Haiku) → 일집계 → 시그널 → 리포트(Sonnet).
+- 6단계: 시세(pykrx) → 뉴스(네이버) → 감정(`gemini-3.5-flash-lite`) → 일집계 → 시그널 → 리포트(`gemini-3.5-flash`).
 - 멱등성: 모든 쓰기는 UNIQUE 키 upsert. 뉴스는 `url_hash` dedup으로 LLM 재호출 방지(비용 방어).
 - 순수 함수 분리: 파싱·감정·시그널·리포트 payload를 I/O에서 떼어내 단위 테스트로 고정.
 - 외부 클라이언트/의존성은 지연(lazy) 생성 → 키 없이 단계별 검증 가능.
@@ -104,49 +107,52 @@ briefing/
 
 ---
 
-## 7. 다음에 진행할 것
+## 7. 배포 구성 (M9 완료 상태)
 
-### 7-A. (지금) API 연결 — 사용자 작업
-데이터가 실제로 흐르게 하려면 아래 순서로 연결:
+### 7-A. 레이어별 배포 위치·환경변수
 
-1. **Supabase**: 프로젝트 생성 → SQL Editor에 `db/schema.sql` 실행 → `Project URL`·`service_role` 키 확보.
-2. **키 발급**: 네이버 개발자센터(Client ID/Secret), Anthropic 콘솔(API Key).
-3. **파이프라인 실행** (`pipeline/.env` 작성 후):
-   ```bash
-   cd pipeline && pip install -r requirements.txt
-   python seed_tickers.py     # 종목 4개
-   python pipeline.py         # 데이터 적재
-   ```
-   env: `SUPABASE_URL`, `SUPABASE_KEY`, `ANTHROPIC_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`
-4. **FastAPI 기동** (`api/.env` 작성 후):
-   ```bash
-   uvicorn api.main:app --reload
-   ```
-   env: `SUPABASE_URL`, `SUPABASE_KEY`(읽기=anon 권장), `CORS_ORIGINS=http://localhost:5173`
-5. **프론트 연결** (`frontend/.env`에 `VITE_API_BASE=http://127.0.0.1:8000`):
-   ```bash
-   cd frontend && npm run dev
-   ```
+| 레이어 | 플랫폼 | 환경변수 |
+|---|---|---|
+| A. 파이프라인 | GitHub Actions (repo Secrets) | `SUPABASE_URL`, `SUPABASE_KEY`(service_role), `GEMINI_API_KEY`, `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` |
+| B. API | Render (Web Service, Free) | `SUPABASE_URL`, `SUPABASE_KEY`(**anon**), `CORS_ORIGINS` |
+| C. 프론트 | Vercel (Root Directory=`frontend`) | `VITE_API_BASE` |
 
-> 각 `.env`는 해당 폴더 `.env.example` 복사해서 채움(`.env`는 gitignore).
+- Render Build: `pip install -r api/requirements.txt` / Start: `uvicorn api.main:app --host 0.0.0.0 --port $PORT`
+- Python 버전은 `runtime.txt`(3.12)로 고정 — Render 기본값이 최신 Python이라 호환성 이슈 방지.
+- `CORS_ORIGINS`에는 Vercel production + git 프리뷰 도메인을 콤마로 함께 등록.
 
-### 7-B. 연결 후 확인
-- 실제 데이터로 대시보드 채워진 화면 확인(시그널 카드 색·차트·리포트).
-- 초기엔 감정 기준선 히스토리가 부족해 시그널이 잘 안 뜨는 게 정상.
-- 파이프라인 로그로 각 단계 건수 확인(`[price] N건` 등).
+### 7-B. 연동 중 실제로 막혔던 지점 (재구축 시 참고)
 
-### 7-C. M9 — 배포 (다음 마일스톤)
-- **FastAPI → Render/Fly**: `render.yaml`(또는 fly.toml) 작성, 환경변수 등록.
-- **프론트 → Vercel**: 빌드 설정, `VITE_API_BASE`를 배포된 API 주소로.
-- **GitHub Actions Secrets** 등록 후 `workflow_dispatch`로 파이프라인 1회 수동 실행.
-- **keep-alive**: Render 무료 슬립 대비 핑용 cron 워크플로우(`.github/workflows/keepalive.yml`).
-- CORS를 실제 프론트 도메인으로 갱신.
+1. **네이버 검색 API가 NCP로 이관됨** — 구 `developers.naver.com`의 `openapi.naver.com` +
+   `X-Naver-Client-Id/Secret` 방식이 아니라, NCP *Naver API Hub*는
+   `naverapihub.apigw.ntruss.com/search/v1/news` + `X-NCP-APIGW-API-KEY-ID/KEY` 헤더를 쓴다.
+   또한 애플리케이션에 "뉴스" API를 개별로 추가 신청해야 한다.
+2. **Gemini 2.5 계열은 신규 사용자에게 제공 종료** — `models.list()`에는 보이지만 호출 시 404.
+   현재는 3.5 계열 사용.
+3. **무료 티어 15 RPM 제한** — 뉴스 40건을 연속 호출하면 대부분 429. `SENTIMENT_CALL_INTERVAL`(4.5초)로 간격 확보.
+4. **Gemini 3.x의 thinking 토큰이 `max_output_tokens`를 소진** — 리포트 본문이 잘리고 모델의
+   자기검증 메모만 저장되는 현상. `thinking_config=ThinkingConfig(thinking_budget=0)`으로 해결.
+5. **Supabase 자동 RLS** — 프로젝트 생성 시 "Enable automatic RLS"가 켜져 있으면 모든 테이블에
+   RLS가 걸리고 정책이 없어 **anon 키로는 전 테이블 0건**이 된다(service_role은 우회하므로 눈치채기 어려움).
+   공개 데이터만 다루므로 `alter table ... disable row level security`로 해제.
+6. **Vercel Deployment Protection** — 기본 활성 시 비로그인 방문자가 SSO 로그인으로 리다이렉트된다. 공개 대시보드이므로 해제 필요.
+7. **Vercel 환경변수 자동 제안** — 루트 `.env.example`을 읽어 백엔드 키까지 제안하지만,
+   프론트에 필요한 건 `VITE_API_BASE` 하나뿐. 나머지는 넣지 말 것(불필요한 시크릿 확산).
 
 ---
 
-## 8. 확인 필요 / 주의사항
+## 8. 다음에 할 만한 것 / 주의사항
 
-- `pipeline/pipeline.py`의 모델명(`claude-sonnet-5`, `claude-haiku-4-5-20251001`)이 실제 사용 가능한 값인지 첫 실행 시 확인.
+### 다음 후보
+- **keep-alive 워크플로우**: Render 무료 티어는 15분 미사용 시 슬립 → 첫 요청 30~60초 지연.
+  `.github/workflows/keepalive.yml`로 주기적 핑을 넣으면 완화 가능.
+- **시그널 발화 관찰**: `baseline`은 직전 5영업일 평균이라, 히스토리가 쌓이기 전(초기 며칠)에는
+  `baseline == avg`가 되어 delta 0 → 시그널 미발화가 정상. 며칠 운영 후 실제 발화 확인 필요.
+- **Actions 워크플로우 액션 버전**: `actions/checkout@v4`, `setup-python@v5`가 Node 20 지원 종료 경고.
+  동작에는 지장 없으나 추후 상위 버전으로 갱신 여지.
+
+### 주의사항
 - pykrx는 주말/공휴일에도 최근 영업일 데이터를 가져오지만, 네이버 뉴스는 당일 검색이라 초기 시그널 발화가 적을 수 있음.
 - 프론트 번들이 recharts로 약 650KB(gzip 190KB) — 필요 시 code-splitting 여지.
-- npm audit 취약점 2건(대부분 dev 의존성 추이) — 배포 전 판단.
+- npm audit 취약점 2건(대부분 dev 의존성 추이).
+- 뉴스 감정 호출이 기사 수에 비례해 느려짐(4.5초 × N). 워치리스트를 늘리면 실행 시간도 함께 증가.
