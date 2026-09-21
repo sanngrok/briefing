@@ -331,6 +331,9 @@ export function PortfolioPanel({
                                 {formatPct(r.changePct)}
                               </span>
                             )}
+                            {r.priceSource === 'imported' && (
+                              <span className="pf-imported">가져온 시세</span>
+                            )}
                           </>
                         )}
                       </td>

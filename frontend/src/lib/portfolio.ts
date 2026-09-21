@@ -15,6 +15,13 @@ export interface Holding {
   quantity: number
   avgPrice: number
   memo?: string
+  /**
+   * 가져오기(toss_sync.py 등) 시점의 시세 스냅샷 — 워치리스트에 시세가 없는 종목
+   * (해외 종목, 워치리스트 밖 국내 종목)의 폴백으로만 쓴다. 실시간이 아니라
+   * '가져온 시점' 값이라 워치리스트 시세가 있으면 항상 그쪽을 우선한다.
+   */
+  importedClose?: number | null
+  importedChangePct?: number | null
 }
 
 /** 폼 입력값(문자열 그대로). 검증을 거쳐 Holding 이 된다. */
@@ -36,6 +43,8 @@ export interface HoldingRow extends Holding {
   returnPct: number | null
   dayPnl: number | null
   weight: number | null
+  /** close 가 워치리스트 실시간 시세인지, 가져오기 스냅샷인지 (없으면 null). */
+  priceSource: 'live' | 'imported' | null
 }
 
 export interface PortfolioTotals {
@@ -147,15 +156,17 @@ export function computeRows(holdings: Holding[], quotes: QuoteLike[]): HoldingRo
 
   const rows: HoldingRow[] = (holdings ?? []).map((h) => {
     const quote = bySymbol.get(h.symbol)
-    const close = quote?.close ?? null
-    const changePct = quote?.change_pct ?? null
+    const hasLiveQuote = quote?.close != null
+    const close = quote?.close ?? h.importedClose ?? null
+    const changePct = quote?.change_pct ?? h.importedChangePct ?? null
+    const priceSource = hasLiveQuote ? 'live' : close !== null ? 'imported' : null
     const cost = h.quantity * h.avgPrice
     const value = close === null ? null : h.quantity * close
     const pnl = value === null ? null : value - cost
     const returnPct = pnl === null || cost <= 0 ? null : (pnl / cost) * 100
     const prev = close === null ? null : previousClose(close, changePct)
     const dayPnl = close === null || prev === null ? null : (close - prev) * h.quantity
-    return { ...h, close, changePct, cost, value, pnl, returnPct, dayPnl, weight: null }
+    return { ...h, close, changePct, cost, value, pnl, returnPct, dayPnl, weight: null, priceSource }
   })
 
   // 비중은 평가금액 합계 대비 — 합계가 나온 뒤에야 계산할 수 있다.
@@ -234,6 +245,8 @@ export function parseHoldings(raw: unknown): Holding[] {
     if (seen.has(symbol)) continue          // 같은 종목 중복 저장본 방어
     seen.add(symbol)
     const memo = typeof o.memo === 'string' ? o.memo.trim() : ''
+    const importedClose = Number(o.importedClose)
+    const importedChangePct = Number(o.importedChangePct)
     out.push({
       id: typeof o.id === 'string' && o.id ? o.id : `${symbol}-${out.length}`,
       symbol,
@@ -241,6 +254,8 @@ export function parseHoldings(raw: unknown): Holding[] {
       quantity,
       avgPrice,
       ...(memo ? { memo } : {}),
+      ...(Number.isFinite(importedClose) ? { importedClose } : {}),
+      ...(Number.isFinite(importedChangePct) ? { importedChangePct } : {}),
     })
   }
   return out
