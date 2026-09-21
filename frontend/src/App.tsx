@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from './api/client'
-import type { Movers, NewsItem, Report, Signal, Ticker, TickerMetrics } from './api/client'
+import type { Movers, NewsItem, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { DisclaimerBadge } from './components/DisclaimerBadge'
 import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
@@ -8,6 +8,9 @@ import { SentimentChart } from './components/SentimentChart'
 import { MoversPanel } from './components/MoversPanel'
 import { NewsList } from './components/NewsList'
 import { ReportView } from './components/ReportView'
+import { PortfolioPanel } from './components/PortfolioPanel'
+import { loadHoldings, saveHoldings } from './lib/portfolio'
+import type { Holding } from './lib/portfolio'
 
 export default function App() {
   const [tickers, setTickers] = useState<Ticker[]>([])
@@ -18,6 +21,17 @@ export default function App() {
   const [metrics, setMetrics] = useState<TickerMetrics | null>(null)
   const [symbol, setSymbol] = useState('')
   const [loadError, setLoadError] = useState(false)
+
+  // 내 포트폴리오: 개인 매매 정보라 서버에 보내지 않고 이 브라우저에만 둔다.
+  const [holdings, setHoldings] = useState<Holding[]>(() => loadHoldings())
+  const [quotes, setQuotes] = useState<Quote[]>([])
+  const [quoteDate, setQuoteDate] = useState<string | null>(null)
+  const [storageFailed, setStorageFailed] = useState(false)
+
+  function updateHoldings(next: Holding[]) {
+    setHoldings(next)
+    setStorageFailed(!saveHoldings(next))
+  }
 
   // 워치리스트는 서버가 가진 것을 그대로 따른다(프론트 하드코딩 금지).
   useEffect(() => {
@@ -32,6 +46,14 @@ export default function App() {
     api.signals().then(setSignals).catch(() => setSignals([]))
     api.news({ limit: 12 }).then(setNews).catch(() => setNews([]))
     api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
+    // 포트폴리오 평가용 최근 영업일 종가 (워치리스트 전체를 한 번에)
+    api
+      .quotes()
+      .then((q) => {
+        setQuotes(q.quotes)
+        setQuoteDate(q.date ?? null)
+      })
+      .catch(() => setQuotes([]))
   }, [])
 
   useEffect(() => {
@@ -62,6 +84,22 @@ export default function App() {
         <DisclaimerBadge />
         <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.length} />
       </header>
+
+      <section className="section">
+        <h2 className="section-title">
+          내 포트폴리오
+          <span className="section-hint">이 브라우저에만 저장 · 서버로 전송되지 않음</span>
+        </h2>
+        <PortfolioPanel
+          holdings={holdings}
+          onChange={updateHoldings}
+          quotes={quotes}
+          quoteDate={quoteDate}
+          tickers={tickers}
+          signals={signals}
+          storageFailed={storageFailed}
+        />
+      </section>
 
       <section className="section">
         <h2 className="section-title">

@@ -93,3 +93,34 @@ def to_signal(row: dict) -> dict:
         "symbol": ticker.get("symbol"),
         "name": ticker.get("name"),
     }
+
+
+def build_quotes(rows: list, symbols: list | None = None) -> list:
+    """특정 일자 시세 rows 를 종목별 1건의 시세(Quote) 목록으로. (순수 함수)
+
+    symbols 를 주면 그 종목만, 요청한 순서 그대로 돌려준다(프론트가 재정렬할 필요 없음).
+    시세가 없는 종목은 조용히 빠진다 — 워치리스트 밖 종목을 보유 중일 수 있기 때문에,
+    없는 것을 404 로 막지 않고 "시세 없음"으로 표현하는 책임을 호출부에 넘긴다.
+    """
+    by_symbol: dict[str, dict] = {}
+    for r in rows or []:
+        ticker = r.get("tickers") or {}
+        symbol = ticker.get("symbol")
+        if not symbol:
+            continue
+        by_symbol[symbol] = {
+            "symbol": symbol,
+            "name": ticker.get("name", ""),
+            "date": r["date"],
+            "close": r.get("close"),
+            "change_pct": r.get("change_pct"),
+        }
+    if symbols is None:
+        return [by_symbol[s] for s in sorted(by_symbol)]
+    out = []
+    seen: set[str] = set()
+    for s in symbols:
+        if s in by_symbol and s not in seen:   # 중복 요청은 1건만
+            seen.add(s)
+            out.append(by_symbol[s])
+    return out

@@ -10,12 +10,24 @@ Supabase 의 tickers 테이블에 초기 종목을 upsert 한다.
 
 실행:
   cd pipeline
-  python seed_tickers.py
+  python seed_tickers.py                    # 시총 상위 20 + (있으면) 내 보유 종목
+  python seed_tickers.py --no-portfolio     # 시총 상위 20 만
+  python seed_tickers.py --portfolio ~/portfolio.json
+
+내 보유 종목 반영:
+  tools/toss_sync.py 가 만든 portfolio.json 이 있으면 그 종목도 워치리스트에 넣는다.
+  넣어야 시세·뉴스가 수집되고, 대시보드에서 "시세 없음"이 아니라 평가가 된다.
+
+  주의: 이 스크립트는 목록에 없는 종목을 active=False 로 내린다. 그래서 보유 종목도
+  '매번' 같이 넘겨야 켜진 채로 남는다 — portfolio.json 을 자동으로 찾는 이유다.
 
 환경변수가 없으면 실행하지 않고 안내만 출력한다 (구조 우선, 키 연동은 이후 단계).
 """
 
+import argparse
+import json
 import os
+import re
 import sys
 
 # ---- 시드 종목 -------------------------------------------------------
@@ -54,6 +66,86 @@ SEED_TICKERS = [
 ]
 
 
+# ---- 내 보유 종목 -----------------------------------------------------
+# portfolio.json 에서 가져온 종목은 종목명을 그대로 뉴스 검색어로 쓴다.
+# 그 이름이 검색어로 부적절할 때만(동명이인·야구단·지주사 등) 여기에 넣는다.
+# 위 SEED_TICKERS 의 "기아" 주석이 왜 필요한지 보여주는 대표 사례다.
+PORTFOLIO_ALIAS_OVERRIDES = {
+    # "000270": ["기아차", "기아 자동차", "Kia"],
+}
+
+# 워치리스트는 KRX 전용(pykrx 로 시세를 받는다). 6자리 숫자가 아닌 심볼은 넣지 않는다.
+KR_SYMBOL = re.compile(r"^\d{6}$")
+
+# portfolio.json 을 찾아볼 위치 (pipeline/ 에서 실행하는 경우와 루트에서 실행하는 경우)
+PORTFOLIO_CANDIDATES = ("portfolio.json", "../portfolio.json")
+
+
+def load_portfolio(path: str) -> list:
+    """portfolio.json 에서 (symbol, name) 목록을 읽는다.
+
+    tools/toss_sync.py 산출물과 대시보드 '내보내기' 파일이 같은 형태라 둘 다 읽힌다.
+    형식이 깨졌으면 빈 목록 — 시드 자체가 실패하지는 않게 한다.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    items = data.get("holdings") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    out = []
+    for h in items:
+        if not isinstance(h, dict):
+            continue
+        symbol = str(h.get("symbol") or "").strip()
+        if symbol:
+            out.append({"symbol": symbol, "name": str(h.get("name") or symbol).strip() or symbol})
+    return out
+
+
+def find_portfolio(candidates=PORTFOLIO_CANDIDATES) -> str:
+    """기본 위치에서 portfolio.json 을 찾는다. 없으면 None."""
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def merge_portfolio(seed: list, holdings: list, overrides: dict = None) -> tuple:
+    """시드 종목 + 보유 종목을 합친다. (순수 함수)
+
+    반환: (merged, added, skipped)
+      - 이미 시드에 있는 종목은 시드 쪽을 그대로 둔다. 시드의 aliases 는 실제 검색
+        결과를 눈으로 확인해 넣은 값이라, 자동 추출한 종목명보다 믿을 수 있다.
+      - 같은 종목이 portfolio 안에 중복돼 있어도 1건만 들어간다.
+      - KRX 6자리 코드가 아닌 심볼(해외 티커 등)은 skipped 로 뺀다. pykrx 가
+        시세를 못 가져와 파이프라인이 매번 헛돌기 때문이다.
+    """
+    overrides = overrides or {}
+    merged = list(seed)
+    seen = {t["symbol"] for t in merged}
+    added, skipped = [], []
+
+    for h in holdings or []:
+        symbol = h["symbol"]
+        if symbol in seen:
+            continue
+        if not KR_SYMBOL.match(symbol):
+            skipped.append(h)
+            continue
+        seen.add(symbol)
+        entry = {
+            "symbol": symbol,
+            "name": h["name"],
+            "aliases": overrides.get(symbol) or [h["name"]],
+        }
+        merged.append(entry)
+        added.append(entry)
+    return merged, added, skipped
+
+
 def _require_env(name: str) -> str:
     val = os.environ.get(name)
     if not val:
@@ -66,7 +158,48 @@ def _require_env(name: str) -> str:
     return val
 
 
-def main():
+def build_watchlist(args) -> list:
+    """시드 + (옵션) 보유 종목으로 이번에 적용할 워치리스트를 만든다."""
+    if args.no_portfolio:
+        return SEED_TICKERS
+
+    path = args.portfolio or find_portfolio()
+    if not path:
+        print("[seed] portfolio.json 이 없어 시드 종목만 반영합니다. "
+              "(내 보유 종목을 넣으려면 tools/toss_sync.py 를 먼저 실행하세요)")
+        return SEED_TICKERS
+
+    holdings = load_portfolio(path)
+    if not holdings:
+        print(f"[seed] {path} 에서 보유 종목을 읽지 못했습니다. 시드 종목만 반영합니다.")
+        return SEED_TICKERS
+
+    merged, added, skipped = merge_portfolio(holdings=holdings, seed=SEED_TICKERS,
+                                             overrides=PORTFOLIO_ALIAS_OVERRIDES)
+    print(f"[seed] {path} 에서 보유 {len(holdings)}종목 확인 "
+          f"-> 워치리스트에 {len(added)}종목 추가")
+    if added:
+        for t in added:
+            print(f"       + {t['symbol']} {t['name']}  (뉴스 검색어: \"{t['aliases'][0]}\")")
+        # 자동 추출한 검색어는 눈으로 확인해야 한다 — 엉뚱한 기사가 섞이면
+        # 그 종목의 감정 점수가 통째로 오염된다(SEED_TICKERS 의 '기아' 사례).
+        print("       ! 검색어가 회사와 무관한 기사를 부르지 않는지 확인하세요.")
+        print("         부적절하면 seed_tickers.py 의 PORTFOLIO_ALIAS_OVERRIDES 에 넣으세요.")
+    if skipped:
+        names = ", ".join(f"{h['name']}({h['symbol']})" for h in skipped)
+        print(f"       - 국내 종목이 아니라 제외: {names}")
+    return merged
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="워치리스트 시드 (시총 상위 + 내 보유 종목)")
+    parser.add_argument("--portfolio", help="보유 종목 JSON 경로 (기본: portfolio.json 자동 탐색)")
+    parser.add_argument("--no-portfolio", action="store_true",
+                        help="보유 종목을 넣지 않고 시드 종목만 반영")
+    args = parser.parse_args(argv)
+
+    watchlist = build_watchlist(args)
+
     url = _require_env("SUPABASE_URL")
     key = _require_env("SUPABASE_KEY")
 
@@ -74,13 +207,13 @@ def main():
     sb = create_client(url, key)
 
     # symbol UNIQUE 기준 upsert -> 재실행해도 중복 없음(멱등)
-    rows = [{**t, "active": True} for t in SEED_TICKERS]
+    rows = [{**t, "active": True} for t in watchlist]
     sb.table("tickers").upsert(rows, on_conflict="symbol").execute()
-    print(f"[seed] {len(SEED_TICKERS)}개 종목 upsert 완료")
+    print(f"[seed] {len(watchlist)}개 종목 upsert 완료")
 
     # 목록에서 빠진 종목은 비활성화한다. 행을 지우면 과거 시세·뉴스(FK)까지
     # 잃으므로 active=False 로만 내려 히스토리는 남긴다.
-    keep = [t["symbol"] for t in SEED_TICKERS]
+    keep = [t["symbol"] for t in watchlist]
     dropped = (sb.table("tickers").update({"active": False})
                .eq("active", True).not_.in_("symbol", keep).execute().data)
     if dropped:

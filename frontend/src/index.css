@@ -320,6 +320,302 @@ a {
   padding: 4px 6px;
 }
 
+/* ---- 내 포트폴리오 ---- */
+.pf {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pf-warn {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 12.5px;
+}
+
+.pf-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+}
+
+.pf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pf-field-wide {
+  grid-column: span 3;
+}
+
+.pf-field label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.pf-field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pf-field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.pf-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pf-btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pf-btn:hover:not(:disabled) {
+  background: var(--panel-3);
+}
+
+.pf-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pf-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.pf-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-on);
+}
+
+.pf-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: var(--accent);
+}
+
+.pf-btn-sm {
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pf-btn-danger {
+  color: var(--danger-text);
+}
+
+.pf-error,
+.pf-notice {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.pf-error {
+  color: var(--danger-text);
+}
+
+.pf-notice {
+  color: var(--pos);
+}
+
+/* 합계 스트립 */
+.pf-totals {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.pf-total {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 13px;
+  background: var(--panel-2);
+}
+
+.pf-total-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.pf-total-value {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pf-signal-note {
+  margin: 0;
+  padding: 9px 12px;
+  border-left: 3px solid var(--danger);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 보유 테이블 */
+.pf-table-wrap {
+  overflow-x: auto;
+}
+
+.pf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.pf-table th {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pf-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.pf-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.pf-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pf-row.editing {
+  background: var(--accent-soft);
+}
+
+.pf-name {
+  font-weight: 600;
+}
+
+.pf-symbol {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.pf-memo {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.pf-sig {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pf-sig.sev-high {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.pf-sig.sev-mid {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.pf-sig.sev-low {
+  background: var(--neutral-bg);
+  color: var(--neutral-text);
+}
+
+.pf-chg {
+  display: block;
+  font-size: 11.5px;
+}
+
+.pf-noquote {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.pf-rowbtns {
+  display: flex;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.pf-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pf-foot-note {
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
+.pf-foot-btns {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+@media (max-width: 720px) {
+  .pf-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pf-field-wide {
+    grid-column: span 2;
+  }
+
+  .pf-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ---- 급등락 종목 ---- */
 .mover-grid {
   display: grid;

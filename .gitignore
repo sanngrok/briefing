@@ -3,6 +3,10 @@
 .env.local
 *.pem
 
+# 증권사 동기화 산출물 — 실제 보유 종목/수량이 들어있다 (tools/toss_sync.py)
+portfolio.json
+portfolio-*.json
+
 # --- Python ---
 __pycache__/
 *.py[cod]

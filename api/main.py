@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import movers, news, reports, signals, tickers
+from api.routers import movers, news, quotes, reports, signals, tickers
 
 app = FastAPI(
     title="AI 시그널 리포트 API",
@@ -36,3 +36,4 @@ app.include_router(tickers.router)
 app.include_router(signals.router)
 app.include_router(news.router)
 app.include_router(movers.router)
+app.include_router(quotes.router)

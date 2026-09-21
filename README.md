@@ -50,6 +50,9 @@ briefing/
 │   └── requirements.txt
 ├── api/                    # 레이어 B — 읽기 전용 FastAPI (M6)
 ├── frontend/               # 레이어 C — Vercel React(TS) 대시보드 (M7)
+│   └── src/lib/portfolio.ts    # 내 포트폴리오 계산·저장 순수 함수 (M10)
+├── tools/                  # 내 PC 전용 유틸 (레포에 배포되지 않음)
+│   └── toss_sync.py        # 토스증권 잔고 → portfolio.json (M11)
 ├── .github/workflows/      # cron 파이프라인 워크플로우 (M8)
 ├── .env.example            # 환경변수 문서 (실제 값 없음)
 └── README.md
@@ -79,11 +82,15 @@ briefing/
 2. **워치리스트 시드** — 환경변수(`SUPABASE_URL`, `SUPABASE_KEY`) 설정 후:
    ```bash
    cd pipeline
-   python seed_tickers.py
+   python seed_tickers.py                  # 시총 상위 20 + (있으면) 내 보유 종목
+   python seed_tickers.py --no-portfolio   # 시총 상위 20 만
    ```
    - `symbol` UNIQUE 기준 upsert → **재실행해도 중복이 쌓이지 않습니다**(멱등).
-   - 기본 시드: 삼성전자(005930) · SK하이닉스(000660) · NAVER(035420) · 카카오(035720).
-   - 종목을 바꾸려면 `seed_tickers.py` 의 `SEED_TICKERS` 를 수정하세요.
+   - 기본 시드: KRX 시가총액 상위 20 종목 (`SEED_TICKERS` 에서 수정).
+   - `portfolio.json` 이 있으면 **내 보유 종목도 자동으로 워치리스트에 들어갑니다**
+     (아래 [내 보유 종목 워치리스트 반영](#내-보유-종목-워치리스트-반영) 참고).
+   - ⚠️ 목록에 없는 종목은 `active=False` 로 내려갑니다. 행을 지우지는 않으므로
+     과거 시세·뉴스는 남습니다.
 
 ---
 
@@ -137,6 +144,7 @@ FastAPI. Supabase 를 **읽기만** 하며 CORS 는 프론트 도메인만, GET 
 | GET | `/api/reports/{date}` | 특정일 리포트 |
 | GET | `/api/tickers/{symbol}/metrics?from=&to=` | 종목 시세·감정 시계열 |
 | GET | `/api/signals?date=&severity=` | 시그널 목록(필터) |
+| GET | `/api/quotes?symbols=&date=` | 최근 영업일 종가·등락률(포트폴리오 평가용) |
 
 **로컬 실행 / 테스트**
 ```bash
@@ -159,9 +167,106 @@ cd frontend
 npm install
 npm run dev        # http://localhost:5173 (개발 서버)
 npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
+npm test           # vitest — 포트폴리오 순수 함수 단위 테스트
 ```
 > 환경변수 `VITE_API_BASE` 로 백엔드 주소 주입(기본 `http://127.0.0.1:8000`).
 > 백엔드가 없어도 앱은 기동하며 각 섹션은 빈 상태/에러 안내로 gracefully 처리됩니다.
+
+### 내 포트폴리오 (보유 종목 관리)
+
+대시보드에서 보유 종목을 직접 입력해 **평가손익·수익률·비중**을 확인합니다.
+
+- **입력**: 종목코드 · 종목명 · 수량 · 평균 매입가 · 메모. 워치리스트 종목코드를 넣으면
+  종목명이 자동으로 채워지고(`datalist` 자동완성), `5930` 처럼 앞자리 0 을 빼도 `005930` 으로 정규화됩니다.
+- **평가**: `/api/quotes` 의 최근 영업일 종가로 평가금액 · 평가손익 · 수익률 · 비중 · 전일 대비 손익을 계산합니다.
+  워치리스트 밖 종목은 시세가 없어 "시세 없음"으로 표시되고 **수익률 분모에서 제외**됩니다.
+- **추가 매수**: 이미 담긴 종목을 다시 추가하면 수량가중 평단으로 합쳐집니다(물타기).
+- **시그널 연동**: 보유 종목에 감정 급변 시그널이 발화되면 행에 배지가 붙고 상단에 요약이 뜹니다.
+- **저장 위치**: 개인 매매 정보이므로 **브라우저 localStorage 에만** 저장되며 서버로 전송되지 않습니다.
+  덕분에 서빙 API 는 읽기 전용(하드룰 §4)을 유지합니다. 기기 간 이전은 JSON **내보내기/가져오기**로 합니다.
+
+> 계산 로직(`src/lib/portfolio.ts`)은 순수 함수로 분리돼 `npm test` 로 고정되어 있습니다.
+
+---
+
+## 증권사 연동 (토스증권 Open API, 내 PC 전용)
+
+보유 종목을 손으로 입력하는 대신 **실제 계좌 잔고를 읽어와** 대시보드에 넣을 수 있습니다.
+
+```
+[내 PC] tools/toss_sync.py ──(토스증권 Open API)──> portfolio.json
+                                                      │ '가져오기'
+                                                      ▼
+                                          [대시보드] 내 브라우저에만 저장
+```
+
+**왜 서버가 아니라 내 PC 인가** — 증권사 Client ID/Secret 은 조회뿐 아니라 **주문까지 나가는
+자격증명**입니다. 이 대시보드는 로그인이 없는 공개 페이지라, 서버에서 잔고를 내려주면 누구나
+볼 수 있습니다. 그래서 키는 내 PC 의 `.env` 에만 두고, 서빙 API 는 계속 읽기 전용으로 둡니다.
+
+**준비**
+1. 토스증권 앱 → 전체 → **Open API** → 신청 (Client ID/Secret 발급, 앱에서만 재확인 가능)
+2. `.env` 에 `TOSS_CLIENT_ID` / `TOSS_CLIENT_SECRET` 입력 (`.env` 는 `.gitignore`)
+
+**실행**
+```bash
+pip install -r tools/requirements.txt
+
+python tools/toss_sync.py                   # portfolio.json 생성
+python tools/toss_sync.py --list-accounts   # 계좌 목록 확인 (번호는 마스킹)
+python tools/toss_sync.py --account-no 12345678901
+python tools/toss_sync.py --include-us      # 해외(USD) 종목까지 포함
+```
+그다음 대시보드 **내 포트폴리오 → 가져오기** 에서 생성된 파일을 선택하면 반영됩니다.
+
+- 호출하는 것은 `GET /oauth2/token` · `/api/v1/accounts` · `/api/v1/holdings` **세 개뿐**입니다.
+  주문 엔드포인트는 스크립트 어디에서도 부르지 않습니다.
+- 기본값은 **국내(KRW) 종목만**입니다. 대시보드 합계가 원화 기준이라 달러 종목을 섞으면
+  매입금액 합계의 통화가 뒤섞이기 때문입니다. `--include-us` 로 포함할 수 있습니다.
+- 산출물 `portfolio.json` 은 실제 보유 정보라 `.gitignore` 에 들어 있습니다.
+- 계좌번호는 로그에 `1234***8901` 로 마스킹되고, 키·토큰은 출력되지 않습니다.
+
+```bash
+python -m pytest tools/tests -v   # 변환 로직 단위 테스트 (키·네트워크 불필요)
+```
+
+> 토스증권 Open API 문서: https://developers.tossinvest.com/docs
+
+---
+
+## 내 보유 종목 워치리스트 반영
+
+포트폴리오에 담은 종목이 워치리스트 밖이면 시세·뉴스를 수집하지 않아 대시보드에
+**"시세 없음"** 으로 뜹니다. 아래처럼 워치리스트에 넣으면 평가가 됩니다.
+
+```bash
+python tools/toss_sync.py          # 1) 보유 종목 -> portfolio.json (레포 루트)
+cd pipeline
+python seed_tickers.py             # 2) portfolio.json 을 찾아 워치리스트에 합침
+```
+
+- `portfolio.json` 은 **자동으로 찾습니다** (`./portfolio.json`, `../portfolio.json`).
+  경로를 직접 주려면 `--portfolio ~/portfolio.json`, 넣지 않으려면 `--no-portfolio`.
+- 대시보드 **내보내기**로 받은 파일도 같은 형식이라 그대로 쓸 수 있습니다
+  (토스 연동 없이 손으로 입력한 경우).
+- 이미 시드에 있는 종목은 **시드 쪽 설정을 유지**합니다. 시드의 뉴스 검색어는 실제
+  검색 결과를 확인해 넣은 값이라, 자동 추출한 종목명보다 정확하기 때문입니다.
+- 해외 티커(`AAPL` 등)는 제외됩니다. 워치리스트는 pykrx 기반이라 KRX 6자리 코드만 받습니다.
+
+**⚠️ 추가된 종목의 뉴스 검색어를 확인하세요.** 자동으로 종목명을 검색어로 쓰는데,
+회사와 무관한 기사가 섞이면 그 종목의 감정 점수가 통째로 오염됩니다
+(시드의 `기아` → `기아차` 주석이 그 사례). 부적절하면 `seed_tickers.py` 의
+`PORTFOLIO_ALIAS_OVERRIDES` 에 검색어를 넣으세요:
+
+```python
+PORTFOLIO_ALIAS_OVERRIDES = {
+    "000270": ["기아차", "기아 자동차", "Kia"],
+}
+```
+
+> 반영 직후에는 아직 시세 이력이 없습니다. **다음 파이프라인 실행(평일 16:00 KST)**
+> 이후부터 시세·뉴스가 쌓이고, 감정 급변 시그널은 기준선(직전 5영업일)이 생긴 뒤
+> 발화합니다. 바로 확인하려면 Actions 탭에서 `daily-pipeline` 을 수동 실행하세요.
 
 ---
 
@@ -196,6 +301,9 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 | M7 | 프론트엔드 (Recharts) | ✅ |
 | M8 | GitHub Actions 워크플로우 | ✅ |
 | M9 | 배포 (Render + Vercel) | ✅ |
+| M10 | 내 포트폴리오 (보유·손익 관리) | ✅ |
+| M11 | 토스증권 Open API 연동 (로컬 동기화) | ✅ |
+| M12 | 보유 종목 워치리스트 자동 반영 | ✅ |
 
 ---
 

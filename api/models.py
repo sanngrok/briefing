@@ -77,3 +77,17 @@ class Signal(BaseModel):
     type: str
     severity: Literal["low", "mid", "high"]
     evidence: dict = {}
+
+
+class Quote(BaseModel):
+    """특정 일자의 종목 시세 한 건 (포트폴리오 평가용 최소 필드)."""
+    symbol: str
+    name: str
+    date: Date
+    close: Optional[float] = None
+    change_pct: Optional[float] = None
+
+
+class Quotes(BaseModel):
+    date: Optional[Date] = None
+    quotes: list[Quote] = []
