@@ -577,6 +577,12 @@ a {
   font-size: 12px;
 }
 
+.pf-imported {
+  display: block;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+
 .pf-rowbtns {
   display: flex;
   gap: 5px;

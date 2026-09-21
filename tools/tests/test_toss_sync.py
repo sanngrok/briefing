@@ -33,6 +33,23 @@ def item(**over):
         "quantity": "100",
         "lastPrice": "72000",
         "averagePurchasePrice": "65000",
+        "dailyProfitLoss": {"rate": "0.0181"},
+    }
+    base.update(over)
+    return base
+
+
+def usd_item(**over):
+    """실측(2026-09-21 run) 기반 — 해외 종목은 평단·현재가가 USD 로 온다."""
+    base = {
+        "symbol": "PLTR",
+        "name": "팔란티어",
+        "marketCountry": "US",
+        "currency": "USD",
+        "quantity": "17",
+        "lastPrice": "177.78",
+        "averagePurchasePrice": "176.84",
+        "dailyProfitLoss": {"rate": "0.0007"},
     }
     base.update(over)
     return base
@@ -42,8 +59,24 @@ def item(**over):
 
 def test_to_holding_parses_decimal_strings():
     h = to_holding(item())
-    assert h == {"id": "toss-005930", "symbol": "005930", "name": "삼성전자",
-                 "quantity": 100.0, "avgPrice": 65000.0}
+    assert h["id"] == "toss-005930"
+    assert h["symbol"] == "005930"
+    assert h["name"] == "삼성전자"
+    assert h["quantity"] == 100.0
+    assert h["avgPrice"] == 65000.0
+
+
+def test_to_holding_includes_imported_price_snapshot():
+    """lastPrice/dailyProfitLoss.rate 는 워치리스트에 시세가 없을 때의 폴백으로 같이 내보낸다."""
+    h = to_holding(item())
+    assert h["importedClose"] == 72000.0
+    assert h["importedChangePct"] == pytest.approx(1.81)
+
+
+def test_to_holding_omits_imported_fields_when_missing():
+    h = to_holding(item(lastPrice=None, dailyProfitLoss={}))
+    assert "importedClose" not in h
+    assert "importedChangePct" not in h
 
 
 def test_to_holding_keeps_fractional_quantity():
@@ -60,6 +93,21 @@ def test_to_holding_id_is_stable_across_syncs():
     assert to_holding(item())["id"] == to_holding(item(quantity="7"))["id"]
 
 
+def test_to_holding_converts_usd_with_fx_rate():
+    """해외 종목은 fx_rate(원/달러)를 주면 평단·현재가를 원화로 환산한다."""
+    h = to_holding(usd_item(), fx_rate=1400.0)
+    assert h["avgPrice"] == pytest.approx(176.84 * 1400.0)
+    assert h["importedClose"] == pytest.approx(177.78 * 1400.0)
+    assert h["importedChangePct"] == pytest.approx(0.07)
+
+
+def test_to_holding_leaves_usd_unconverted_without_fx_rate():
+    """fx_rate 를 안 주면 원래 통화값 그대로 둔다 — 통화 혼합 방지는 to_holdings 의 몫."""
+    h = to_holding(usd_item())
+    assert h["avgPrice"] == pytest.approx(176.84)
+    assert h["importedClose"] == pytest.approx(177.78)
+
+
 # --- to_holdings ------------------------------------------------------
 
 def test_to_holdings_excludes_us_by_default():
@@ -72,14 +120,22 @@ def test_to_holdings_excludes_us_by_default():
     assert skipped == ["Apple"]
 
 
-def test_to_holdings_include_us_flag():
+def test_to_holdings_include_us_requires_fx_rate():
+    """include_us=True 여도 환율을 못 구했으면(fx_rate=None) 통화 혼합을 막기 위해 여전히 제외한다."""
+    holdings, skipped = to_holdings({"items": [usd_item()]}, include_us=True, fx_rate=None)
+    assert holdings == []
+    assert skipped == ["팔란티어"]
+
+
+def test_to_holdings_include_us_converts_with_fx_rate():
     holdings, skipped = to_holdings(
-        {"items": [item(symbol="AAPL", marketCountry="US", currency="USD",
-                        quantity="3", averagePurchasePrice="180.5")]},
-        include_us=True,
+        {"items": [item(), usd_item()]}, include_us=True, fx_rate=1400.0,
     )
-    assert [h["symbol"] for h in holdings] == ["AAPL"]
+    assert [h["symbol"] for h in holdings] == ["005930", "PLTR"]
     assert skipped == []
+    pltr = holdings[1]
+    assert pltr["avgPrice"] == pytest.approx(176.84 * 1400.0)
+    assert pltr["importedClose"] == pytest.approx(177.78 * 1400.0)
 
 
 def test_to_holdings_drops_zero_quantity_and_blank_symbol():

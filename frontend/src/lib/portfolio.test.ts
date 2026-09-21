@@ -172,6 +172,31 @@ describe('computeRows', () => {
     const rows = computeRows([holding()], [{ symbol: '5930', close: 70000, change_pct: 0 }])
     expect(rows[0].close).toBe(70000)
   })
+
+  it('워치리스트 시세가 없으면 가져오기 스냅샷(importedClose)을 대신 쓴다', () => {
+    const rows = computeRows(
+      [holding({ symbol: 'PLTR', importedClose: 248900, importedChangePct: 0.53 })],
+      [],
+    )
+    expect(rows[0].close).toBe(248900)
+    expect(rows[0].changePct).toBe(0.53)
+    expect(rows[0].priceSource).toBe('imported')
+    expect(rows[0].value).toBe(2489000)   // 10주 × 248,900원
+  })
+
+  it('워치리스트 시세가 있으면 가져오기 스냅샷보다 우선한다', () => {
+    const rows = computeRows(
+      [holding({ importedClose: 1, importedChangePct: 1 })],
+      [{ symbol: '005930', close: 77000, change_pct: 10 }],
+    )
+    expect(rows[0].close).toBe(77000)
+    expect(rows[0].priceSource).toBe('live')
+  })
+
+  it('시세가 전혀 없으면 priceSource 는 null', () => {
+    const rows = computeRows([holding({ symbol: '999999' })], [])
+    expect(rows[0].priceSource).toBeNull()
+  })
 })
 
 describe('computeTotals', () => {
@@ -246,6 +271,17 @@ describe('parseHoldings', () => {
   it('형태가 아니면 빈 배열', () => {
     expect(parseHoldings(null)).toEqual([])
     expect(parseHoldings({ foo: 1 })).toEqual([])
+  })
+
+  it('importedClose/importedChangePct 를 숫자일 때만 받아준다', () => {
+    const [h] = parseHoldings([
+      { symbol: 'PLTR', quantity: 1, avgPrice: 100, importedClose: 248900, importedChangePct: 0.53 },
+    ])
+    expect(h.importedClose).toBe(248900)
+    expect(h.importedChangePct).toBe(0.53)
+
+    const [h2] = parseHoldings([{ symbol: '005930', quantity: 1, avgPrice: 100, importedClose: 'x' }])
+    expect(h2.importedClose).toBeUndefined()
   })
 })
 
