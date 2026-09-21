@@ -7,13 +7,13 @@
 
 ## 1. 한눈에 보기
 
-- **상태**: **M0~M11 전부 완료. 3개 레이어가 실제로 운영 중.**
+- **상태**: **M0~M12 전부 완료. 3개 레이어가 실제로 운영 중.**
 - **운영 주소**:
   - 프론트: https://briefing-lake.vercel.app
   - API: https://briefing-6pzj.onrender.com
   - 파이프라인: GitHub Actions cron (평일 16:00 KST)
 - **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
-- **테스트**: 파이프라인 36개 + API 31개 + 프론트 30개(vitest) + 증권사 동기화 14개, 모두 키 없이 통과.
+- **테스트**: 파이프라인 49개 + API 31개 + 프론트 30개(vitest) + 증권사 동기화 14개, 모두 키 없이 통과.
 
 ---
 
@@ -43,10 +43,10 @@ briefing/
 ├── db/schema.sql              # 6개 테이블 DDL (tickers/prices/news/sentiment_daily/signals/reports)
 ├── pipeline/                  # 레이어 A (쓰기)
 │   ├── pipeline.py            # 수집→감정→집계→시그널→리포트 오케스트레이터 + 순수 함수
-│   ├── seed_tickers.py        # 워치리스트 시드 (멱등)
+│   ├── seed_tickers.py        # 워치리스트 시드 (멱등) + 보유 종목 병합 (M12)
 │   ├── check_prices.py        # 시세 검증(키 불필요)
 │   ├── requirements.txt / requirements-dev.txt
-│   └── tests/                 # test_news_parse / test_signal / test_report
+│   └── tests/                 # test_news_parse / test_signal / test_report / test_seed_tickers
 ├── api/                       # 레이어 B (읽기 전용 FastAPI)
 │   ├── main.py config.py db.py models.py services.py
 │   ├── routers/               # reports / tickers / signals / news / movers / quotes
@@ -81,6 +81,7 @@ briefing/
 | **M9** | **배포** | ✅ | Render(API) + Vercel(프론트) + Actions Secrets 등록·실행 검증 |
 | **M10** | **내 포트폴리오** | ✅ | 보유 종목 CRUD + 평가손익·수익률·비중 + `/api/quotes` + vitest 30 |
 | **M11** | **토스증권 연동** | ✅ | `tools/toss_sync.py` (로컬 전용) — 실계좌 잔고 → portfolio.json → 가져오기 |
+| **M12** | **보유 종목 워치리스트 반영** | ✅ | `seed_tickers.py` 가 portfolio.json 을 자동 병합 + 테스트 13 |
 
 ---
 
@@ -139,6 +140,23 @@ briefing/
 > API 스펙은 토스증권 공식 OpenAPI 1.1.1 문서 기준
 > (base `https://openapi.tossinvest.com`, 계좌 API 는 `x-tossinvest-account` 헤더 필요).
 
+### M12 — 보유 종목을 워치리스트에 넣을 때 조심한 것
+
+포트폴리오에 담아도 워치리스트 밖이면 시세·뉴스를 안 모아서 "시세 없음"이 된다.
+`seed_tickers.py` 가 `portfolio.json` 을 자동으로 찾아 시드에 합치도록 했다.
+
+- **비활성화 함정**: 이 스크립트는 목록에 없는 종목을 `active=False` 로 내린다.
+  보유 종목을 따로 넣었다면 다음 실행 때 꺼진다. 그래서 별도 스크립트를 만들지 않고
+  시드 목록 자체에 합쳐서, `keep` 목록에도 같이 들어가게 했다.
+- **검색어 오염**: 시드의 aliases 는 실제 검색 결과를 눈으로 확인해 넣은 값이다
+  (`기아` → 야구단 기사 때문에 `기아차`). 자동 추출한 종목명은 그 검증을 못 거치므로,
+  추가된 종목의 검색어를 콘솔에 찍고 확인하라고 경고한다. 필요하면
+  `PORTFOLIO_ALIAS_OVERRIDES` 로 덮어쓴다. **이미 시드에 있는 종목은 시드 쪽을 유지**한다.
+- **해외 티커 제외**: 워치리스트는 pykrx 기반이라 KRX 6자리 코드만 받는다. `AAPL` 을
+  넣으면 파이프라인이 매일 시세 조회에 실패한다.
+- 반영 직후에는 시세 이력이 없다. 다음 파이프라인 실행 후부터 쌓이고, 시그널은
+  기준선(직전 5영업일)이 생긴 뒤 발화한다.
+
 ---
 
 ## 6. 하드 룰 준수 체크
@@ -192,11 +210,8 @@ briefing/
 - **동기화 자동화**: 지금은 수동 실행 + 가져오기. 내 PC 스케줄러(cron/작업스케줄러)로
   장마감 후 `toss_sync.py` 를 돌리게 하면 파일은 갱신되지만, 브라우저 반영은 여전히 수동이다.
   완전 자동화는 로그인이 생긴 뒤에 다루는 게 맞다.
-- **보유 종목 자동 워치리스트 편입**: 토스에서 가져온 종목이 워치리스트 밖이면 시세·뉴스가 없다.
 - **포트폴리오 기기 간 동기화**: 지금은 브라우저 로컬 저장. 동기화하려면 인증(Supabase Auth) +
   RLS 정책 + 쓰기 엔드포인트가 함께 필요하다. 현재 내보내기 JSON 형태가 그대로 스키마 후보.
-- **보유 종목 자동 워치리스트 편입**: 포트폴리오에 담았는데 워치리스트 밖이면 시세·뉴스가 없다.
-  `seed_tickers.py` 에 수동 추가하거나, 보유 종목을 시드에 반영하는 절차가 있으면 편하다.
 - **keep-alive 워크플로우**: Render 무료 티어는 15분 미사용 시 슬립 → 첫 요청 30~60초 지연.
   `.github/workflows/keepalive.yml`로 주기적 핑을 넣으면 완화 가능.
 - **시그널 발화 관찰**: `baseline`은 직전 5영업일 평균이라, 히스토리가 쌓이기 전(초기 며칠)에는

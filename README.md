@@ -82,11 +82,15 @@ briefing/
 2. **워치리스트 시드** — 환경변수(`SUPABASE_URL`, `SUPABASE_KEY`) 설정 후:
    ```bash
    cd pipeline
-   python seed_tickers.py
+   python seed_tickers.py                  # 시총 상위 20 + (있으면) 내 보유 종목
+   python seed_tickers.py --no-portfolio   # 시총 상위 20 만
    ```
    - `symbol` UNIQUE 기준 upsert → **재실행해도 중복이 쌓이지 않습니다**(멱등).
-   - 기본 시드: 삼성전자(005930) · SK하이닉스(000660) · NAVER(035420) · 카카오(035720).
-   - 종목을 바꾸려면 `seed_tickers.py` 의 `SEED_TICKERS` 를 수정하세요.
+   - 기본 시드: KRX 시가총액 상위 20 종목 (`SEED_TICKERS` 에서 수정).
+   - `portfolio.json` 이 있으면 **내 보유 종목도 자동으로 워치리스트에 들어갑니다**
+     (아래 [내 보유 종목 워치리스트 반영](#내-보유-종목-워치리스트-반영) 참고).
+   - ⚠️ 목록에 없는 종목은 `active=False` 로 내려갑니다. 행을 지우지는 않으므로
+     과거 시세·뉴스는 남습니다.
 
 ---
 
@@ -230,6 +234,42 @@ python -m pytest tools/tests -v   # 변환 로직 단위 테스트 (키·네트�
 
 ---
 
+## 내 보유 종목 워치리스트 반영
+
+포트폴리오에 담은 종목이 워치리스트 밖이면 시세·뉴스를 수집하지 않아 대시보드에
+**"시세 없음"** 으로 뜹니다. 아래처럼 워치리스트에 넣으면 평가가 됩니다.
+
+```bash
+python tools/toss_sync.py          # 1) 보유 종목 -> portfolio.json (레포 루트)
+cd pipeline
+python seed_tickers.py             # 2) portfolio.json 을 찾아 워치리스트에 합침
+```
+
+- `portfolio.json` 은 **자동으로 찾습니다** (`./portfolio.json`, `../portfolio.json`).
+  경로를 직접 주려면 `--portfolio ~/portfolio.json`, 넣지 않으려면 `--no-portfolio`.
+- 대시보드 **내보내기**로 받은 파일도 같은 형식이라 그대로 쓸 수 있습니다
+  (토스 연동 없이 손으로 입력한 경우).
+- 이미 시드에 있는 종목은 **시드 쪽 설정을 유지**합니다. 시드의 뉴스 검색어는 실제
+  검색 결과를 확인해 넣은 값이라, 자동 추출한 종목명보다 정확하기 때문입니다.
+- 해외 티커(`AAPL` 등)는 제외됩니다. 워치리스트는 pykrx 기반이라 KRX 6자리 코드만 받습니다.
+
+**⚠️ 추가된 종목의 뉴스 검색어를 확인하세요.** 자동으로 종목명을 검색어로 쓰는데,
+회사와 무관한 기사가 섞이면 그 종목의 감정 점수가 통째로 오염됩니다
+(시드의 `기아` → `기아차` 주석이 그 사례). 부적절하면 `seed_tickers.py` 의
+`PORTFOLIO_ALIAS_OVERRIDES` 에 검색어를 넣으세요:
+
+```python
+PORTFOLIO_ALIAS_OVERRIDES = {
+    "000270": ["기아차", "기아 자동차", "Kia"],
+}
+```
+
+> 반영 직후에는 아직 시세 이력이 없습니다. **다음 파이프라인 실행(평일 16:00 KST)**
+> 이후부터 시세·뉴스가 쌓이고, 감정 급변 시그널은 기준선(직전 5영업일)이 생긴 뒤
+> 발화합니다. 바로 확인하려면 Actions 탭에서 `daily-pipeline` 을 수동 실행하세요.
+
+---
+
 ## 자동화 (GitHub Actions, 레이어 A 실행)
 
 [.github/workflows/pipeline.yml](.github/workflows/pipeline.yml) 이 파이프라인을 실행합니다.
@@ -263,6 +303,7 @@ python -m pytest tools/tests -v   # 변환 로직 단위 테스트 (키·네트�
 | M9 | 배포 (Render + Vercel) | ✅ |
 | M10 | 내 포트폴리오 (보유·손익 관리) | ✅ |
 | M11 | 토스증권 Open API 연동 (로컬 동기화) | ✅ |
+| M12 | 보유 종목 워치리스트 자동 반영 | ✅ |
 
 ---
 
