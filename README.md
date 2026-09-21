@@ -206,7 +206,16 @@ npm test           # vitest — 포트폴리오 순수 함수 단위 테스트
 
 **준비**
 1. 토스증권 앱 → 전체 → **Open API** → 신청 (Client ID/Secret 발급, 앱에서만 재확인 가능)
-2. `.env` 에 `TOSS_CLIENT_ID` / `TOSS_CLIENT_SECRET` 입력 (`.env` 는 `.gitignore`)
+2. 환경변수 파일을 만들고 발급받은 값을 채웁니다:
+   ```bash
+   cp .env.example .env     # 레포 루트에서 (.env 는 .gitignore)
+   ```
+   ```
+   TOSS_CLIENT_ID=발급받은값
+   TOSS_CLIENT_SECRET=발급받은값
+   ```
+   > 값을 안 채우거나 예시 문구를 그대로 두면, 토스 서버에 요청을 보내기 전에
+   > 스크립트가 먼저 막고 무엇을 채워야 하는지 알려줍니다.
 
 **실행**
 ```bash

@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from toss_sync import (  # noqa: E402
     build_export,
+    is_placeholder,
     mask_account_no,
     pick_account,
     to_holding,
@@ -143,3 +144,17 @@ def test_pick_account_raises_on_unknown_and_empty():
 def test_mask_account_no_keeps_only_edges():
     assert mask_account_no("12345678901") == "1234***8901"
     assert mask_account_no("1234") == "****"
+
+
+# --- is_placeholder ---------------------------------------------------
+
+def test_is_placeholder_catches_empty_and_sample_values():
+    """.env.example 을 복사만 하고 값을 안 채운 경우를 호출 전에 잡는다."""
+    for v in ("", "   ", None, "your-toss-client-id", "발급받은ID",
+              "여기에 붙여넣기", "<CLIENT_ID>", "XXXX"):
+        assert is_placeholder(v) is True, v
+
+
+def test_is_placeholder_accepts_real_looking_key():
+    for v in ("a1b2c3d4e5f6", "TOSS-LIVE-9f83kd02mZ", "k7Q_xR2"):
+        assert is_placeholder(v) is False, v

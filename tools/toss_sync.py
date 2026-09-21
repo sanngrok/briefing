@@ -114,6 +114,21 @@ def mask_account_no(account_no: str) -> str:
     return f"{s[:4]}{'*' * max(len(s) - 8, 0)}{s[-4:]}" if len(s) > 8 else "*" * len(s)
 
 
+# .env.example 의 안내 문구를 지우지 않고 그대로 돌리는 실수가 잦다. 그대로 두면
+# 토스 서버까지 갔다가 401 을 받아 "키가 틀렸나?" 로 헤매게 되므로, 호출 전에 막는다.
+PLACEHOLDER_HINTS = ("your-", "발급받은", "여기에", "xxxx")
+
+
+def is_placeholder(value: str) -> bool:
+    """비어 있거나 예시 값이 그대로 남아 있으면 True."""
+    v = (value or "").strip()
+    if not v:
+        return True
+    if v.startswith("<") and v.endswith(">"):
+        return True
+    return any(hint in v.lower() for hint in PLACEHOLDER_HINTS)
+
+
 # =====================================================================
 # I/O — 토스증권 Open API 호출
 # =====================================================================
@@ -200,9 +215,12 @@ def main(argv=None) -> int:
     load_dotenv()
     client_id = os.environ.get("TOSS_CLIENT_ID", "")
     client_secret = os.environ.get("TOSS_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
-        print("TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 없습니다. .env 를 확인하세요.", file=sys.stderr)
-        print("발급: 토스증권 앱 → 전체 → Open API → 신청", file=sys.stderr)
+    if is_placeholder(client_id) or is_placeholder(client_secret):
+        print("TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 이 비어 있거나 예시 값 그대로입니다.",
+              file=sys.stderr)
+        print("  .env 를 열어 = 뒤에 발급받은 값을 붙여넣으세요 "
+              "(.env 가 없으면: cp .env.example .env)", file=sys.stderr)
+        print("  발급: 토스증권 앱 → 전체 → Open API → 신청", file=sys.stderr)
         return 1
 
     client = TossClient(client_id, client_secret)
