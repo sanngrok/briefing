@@ -85,6 +85,12 @@ app.dependency_overrides[get_repo] = lambda: FakeRepo()
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _quotes_never_live_by_default(monkeypatch):
+    """실제 현재 시각·네트워크에 좌우되지 않도록, 명시적으로 켜는 테스트 외엔 항상 꺼둔다."""
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: False)
+
+
 # --- health ----------------------------------------------------------
 def test_health():
     assert client.get("/health").json() == {"status": "ok"}
@@ -274,11 +280,48 @@ def test_quotes_skips_unknown_symbol_instead_of_404():
 def test_quotes_empty_symbols_returns_nothing():
     r = client.get("/api/quotes?symbols=")
     assert r.status_code == 200
-    assert r.json() == {"date": "2026-07-24", "quotes": []}
+    assert r.json() == {"date": "2026-07-24", "quotes": [], "live": False}
 
 
 def test_quotes_rejects_bad_date():
     assert client.get("/api/quotes?date=2026-13-01").status_code == 422
+
+
+def test_quotes_live_window_overlays_naver_price(monkeypatch):
+    """장중~시간외 시간대면 네이버 실시간 값으로 close/change_pct 를 덮어쓴다."""
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: True)
+    monkeypatch.setattr(
+        "api.routers.quotes.fetch_live_quotes",
+        lambda symbols: {"005930": {"close": 274500.0, "change_pct": 5.17}},
+    )
+    r = client.get("/api/quotes?symbols=005930")
+    body = r.json()
+    assert body["live"] is True
+    assert body["quotes"][0]["close"] == 274500.0
+    assert body["quotes"][0]["change_pct"] == 5.17
+
+
+def test_quotes_live_window_falls_back_when_naver_fails(monkeypatch):
+    """네이버 호출이 실패하면(빈 dict) DB 값 그대로 쓰고 live=False 로 보고한다."""
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: True)
+    monkeypatch.setattr("api.routers.quotes.fetch_live_quotes", lambda symbols: {})
+    r = client.get("/api/quotes?symbols=005930")
+    body = r.json()
+    assert body["live"] is False
+    assert body["quotes"][0]["close"] == 100   # FakeRepo 의 DB 값 그대로
+
+
+def test_quotes_explicit_date_skips_live_overlay(monkeypatch):
+    """과거 특정일 조회에는 실시간 값을 덮어쓰지 않는다."""
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        "api.routers.quotes.fetch_live_quotes",
+        lambda symbols: calls.append(symbols) or {},
+    )
+    r = client.get("/api/quotes?date=2026-07-24")
+    assert r.json()["live"] is False
+    assert calls == []
 
 
 def test_build_quotes_pure_dedups_and_ignores_rows_without_ticker():

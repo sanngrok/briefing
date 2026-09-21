@@ -25,6 +25,7 @@ interface Props {
   onChange: (next: Holding[]) => void
   quotes: Quote[]
   quoteDate?: string | null
+  quotesLive?: boolean
   tickers: Ticker[]
   signals: Signal[]
   storageFailed?: boolean
@@ -35,6 +36,7 @@ export function PortfolioPanel({
   onChange,
   quotes,
   quoteDate,
+  quotesLive,
   tickers,
   signals,
   storageFailed,
@@ -366,7 +368,7 @@ export function PortfolioPanel({
       <div className="pf-foot">
         <span className="pf-foot-note mono">
           {rows.length > 0 &&
-            `${quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
+            `${quotesLive ? '실시간(장중, 네이버 금융 기준 · 15초마다 갱신)' : quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
               totals.unpricedCount > 0 ? ` · 시세 없는 ${totals.unpricedCount}건은 평가 제외` : ''
             }`}
         </span>
