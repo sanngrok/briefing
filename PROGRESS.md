@@ -1,19 +1,19 @@
 # 진행 상황 정리 (PROGRESS)
 
 > 금융/트렌드 AI 시그널 리포트 플랫폼 — 국내 주식 뉴스 감정 급변 시그널 대시보드
-> 최종 업데이트: 2026-09-08 · 리모트: `github.com/sanngrok/briefing` (main)
+> 최종 업데이트: 2026-09-21 · 리모트: `github.com/sanngrok/briefing` (main)
 
 ---
 
 ## 1. 한눈에 보기
 
-- **상태**: **M0~M9 전부 완료. 3개 레이어가 실제로 운영 중.**
+- **상태**: **M0~M10 전부 완료. 3개 레이어가 실제로 운영 중.**
 - **운영 주소**:
   - 프론트: https://briefing-lake.vercel.app
   - API: https://briefing-6pzj.onrender.com
   - 파이프라인: GitHub Actions cron (평일 16:00 KST)
 - **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
-- **테스트**: 파이프라인 단위 테스트 36개 + API 테스트 13개, 모두 키 없이 통과.
+- **테스트**: 파이프라인 단위 테스트 36개 + API 테스트 31개 + 프론트 단위 테스트 30개(vitest), 모두 키 없이 통과.
 
 ---
 
@@ -49,10 +49,11 @@ briefing/
 │   └── tests/                 # test_news_parse / test_signal / test_report
 ├── api/                       # 레이어 B (읽기 전용 FastAPI)
 │   ├── main.py config.py db.py models.py services.py
-│   ├── routers/               # reports / tickers / signals
+│   ├── routers/               # reports / tickers / signals / news / movers / quotes
 │   └── tests/test_api.py      # TestClient (DB 불필요)
 ├── frontend/                  # 레이어 C (Vite + React + TS + Recharts)
-│   └── src/                   # App / api / components(SummaryStrip·SignalCard·SentimentChart·ReportView·DisclaimerBadge)
+│   └── src/                   # App / api / components(SummaryStrip·SignalCard·SentimentChart·ReportView·PortfolioPanel·DisclaimerBadge)
+│       └── lib/portfolio.ts   # 내 포트폴리오 계산·저장 순수 함수 + portfolio.test.ts
 ├── .github/workflows/pipeline.yml   # cron + workflow_dispatch
 ├── .env.example               # 환경변수 문서
 └── README.md / PROGRESS.md
@@ -75,6 +76,7 @@ briefing/
 | M8 | GitHub Actions 워크플로우 | ✅ | `pipeline.yml`(cron 16:00 KST + 수동) |
 | — | UI 리디자인 (옵션 A) | ✅ | 요약 우선 KPI 대시보드, 라이트/다크 지원 |
 | **M9** | **배포** | ✅ | Render(API) + Vercel(프론트) + Actions Secrets 등록·실행 검증 |
+| **M10** | **내 포트폴리오** | ✅ | 보유 종목 CRUD + 평가손익·수익률·비중 + `/api/quotes` + vitest 30 |
 
 ---
 
@@ -88,19 +90,38 @@ briefing/
 
 ### 레이어 B — FastAPI (api/)
 - 읽기 전용(Repository 패턴), CORS는 프론트 도메인만·GET만 허용.
-- 엔드포인트: `/api/reports/latest`, `/api/reports/{date}`, `/api/tickers/{symbol}/metrics`, `/api/signals`.
+- 엔드포인트: `/api/reports/latest`, `/api/reports/{date}`, `/api/tickers`, `/api/tickers/{symbol}/metrics`,
+  `/api/signals`, `/api/news`, `/api/movers`, `/api/quotes`.
 - 404/422·`from>to` 검증, Pydantic 응답 모델로 계약 고정.
 
 ### 레이어 C — 프론트 (frontend/)
 - 요약 우선 대시보드: 상단 KPI 스트립 → 시그널 카드 → 종목 추이 차트 → 일일 리포트.
 - 심각도=의미 색(high 빨강/mid 주황/low 회색), 모노 숫자, 라이트/다크 자동.
 - "투자 판단 근거 아님" 면책 라벨(상·하단), 백엔드 미연결 시 graceful degrade.
+- **내 포트폴리오(M10)**: 보유 종목을 직접 입력/수정/삭제하고 최근 영업일 종가로
+  평가금액·평가손익·수익률·비중·전일 대비 손익을 계산. 보유 종목에 시그널이 걸리면 배지로 연결.
+  같은 종목 재입력은 수량가중 평단으로 합산(물타기), JSON 내보내기/가져오기로 기기 간 이전.
+
+### M10 — 내 포트폴리오를 왜 localStorage 에 두었나
+
+개인 매매 정보(보유 수량·평단)를 서버에 올리면 **① 읽기/쓰기 분리(하드룰 §4)** 가 깨지고
+**② 인증이 없어 누구나 남의 데이터를 고칠 수 있다**. 두 문제를 동시에 풀려면 로그인부터
+붙여야 하므로, 이번엔 브라우저 `localStorage` 에만 저장하는 쪽을 택했다.
+
+- 서빙 API 는 계속 GET 전용 — 새로 추가한 `/api/quotes` 도 읽기다(최근 영업일 종가·등락률).
+  보유 종목이 N개일 때 `/api/tickers/{symbol}/metrics` 를 N번 부르지 않게 한 번에 받아간다.
+- 워치리스트 밖 종목도 담을 수 있다. 시세가 없으면 "시세 없음"으로 표시하고
+  **수익률 분모(pricedCost)에서 제외**해 숫자가 왜곡되지 않게 했다.
+- 저장소를 못 쓰는 환경(사생활 보호 모드 등)에서는 앱이 죽지 않고 경고만 띄운다.
+- 기기 간 이전은 JSON 내보내기/가져오기. 나중에 인증을 붙이면 이 JSON 형태
+  (`{version, holdings}`)를 그대로 DB 로 옮기면 된다.
 
 ---
 
 ## 6. 하드 룰 준수 체크
 
 - ✅ 공개 데이터만 사용 · ✅ 투자 자문 아님 라벨(UI+리포트)
+- ✅ 개인 매매정보 비전송(포트폴리오는 브라우저 로컬 저장)
 - ✅ 멱등성(UNIQUE+upsert) · ✅ 읽기/쓰기 분리(FastAPI는 SELECT만)
 - ✅ 비밀키 코드 미포함(.env / Secrets) · ✅ LLM 그라운딩(실데이터 JSON만 근거)
 - ✅ 비용 방어(url_hash dedup) · ✅ 작은 커밋, 항상 실행 가능 상태 유지
@@ -144,6 +165,10 @@ briefing/
 ## 8. 다음에 할 만한 것 / 주의사항
 
 ### 다음 후보
+- **포트폴리오 기기 간 동기화**: 지금은 브라우저 로컬 저장. 동기화하려면 인증(Supabase Auth) +
+  RLS 정책 + 쓰기 엔드포인트가 함께 필요하다. 현재 내보내기 JSON 형태가 그대로 스키마 후보.
+- **보유 종목 자동 워치리스트 편입**: 포트폴리오에 담았는데 워치리스트 밖이면 시세·뉴스가 없다.
+  `seed_tickers.py` 에 수동 추가하거나, 보유 종목을 시드에 반영하는 절차가 있으면 편하다.
 - **keep-alive 워크플로우**: Render 무료 티어는 15분 미사용 시 슬립 → 첫 요청 30~60초 지연.
   `.github/workflows/keepalive.yml`로 주기적 핑을 넣으면 완화 가능.
 - **시그널 발화 관찰**: `baseline`은 직전 5영업일 평균이라, 히스토리가 쌓이기 전(초기 며칠)에는

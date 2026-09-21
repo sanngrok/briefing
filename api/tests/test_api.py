@@ -12,7 +12,13 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.db import get_repo
-from api.services import merge_metric_series, rank_news, split_movers, to_signal
+from api.services import (
+    build_quotes,
+    merge_metric_series,
+    rank_news,
+    split_movers,
+    to_signal,
+)
 
 
 class FakeRepo:
@@ -238,3 +244,61 @@ def test_split_movers_pure_ignores_missing_change():
 def test_rank_news_coerces_bad_tags():
     out = rank_news([{"title": "x", "sentiment": 0.1, "issue_tags": "리콜"}], limit=1)
     assert out[0]["issue_tags"] == []   # list 가 아니면 빈 리스트
+
+
+# ---- /api/quotes (포트폴리오 평가용) ----
+
+def test_quotes_returns_all_watchlist_by_default():
+    r = client.get("/api/quotes")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["date"] == "2026-07-24"
+    assert {q["symbol"] for q in body["quotes"]} == {"005930", "000660", "035420", "035720"}
+    first = body["quotes"][0]
+    assert set(first) == {"symbol", "name", "date", "close", "change_pct"}
+
+
+def test_quotes_filters_by_symbols_in_requested_order():
+    r = client.get("/api/quotes?symbols=035420,005930")
+    assert r.status_code == 200
+    assert [q["symbol"] for q in r.json()["quotes"]] == ["035420", "005930"]
+
+
+def test_quotes_skips_unknown_symbol_instead_of_404():
+    """워치리스트 밖 종목을 보유 중일 수 있으므로 404 대신 조용히 제외한다."""
+    r = client.get("/api/quotes?symbols=005930,999999")
+    assert r.status_code == 200
+    assert [q["symbol"] for q in r.json()["quotes"]] == ["005930"]
+
+
+def test_quotes_empty_symbols_returns_nothing():
+    r = client.get("/api/quotes?symbols=")
+    assert r.status_code == 200
+    assert r.json() == {"date": "2026-07-24", "quotes": []}
+
+
+def test_quotes_rejects_bad_date():
+    assert client.get("/api/quotes?date=2026-13-01").status_code == 422
+
+
+def test_build_quotes_pure_dedups_and_ignores_rows_without_ticker():
+    out = build_quotes(
+        [
+            {"date": "2026-07-24", "close": 1, "change_pct": 1.0},                    # 임베딩 없음
+            {"date": "2026-07-24", "close": 2, "change_pct": 2.0, "tickers": {}},     # symbol 없음
+            {"date": "2026-07-24", "close": 3, "change_pct": 3.0,
+             "tickers": {"symbol": "005930", "name": "삼성전자"}},
+        ],
+        symbols=["005930", "005930"],   # 중복 요청 → 1건
+    )
+    assert len(out) == 1
+    assert out[0] == {"symbol": "005930", "name": "삼성전자", "date": "2026-07-24",
+                      "close": 3, "change_pct": 3.0}
+
+
+def test_build_quotes_pure_sorts_by_symbol_when_unfiltered():
+    rows = [
+        {"date": "d", "tickers": {"symbol": "b", "name": "B"}},
+        {"date": "d", "tickers": {"symbol": "a", "name": "A"}},
+    ]
+    assert [q["symbol"] for q in build_quotes(rows)] == ["a", "b"]

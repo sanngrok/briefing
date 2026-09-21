@@ -50,6 +50,7 @@ briefing/
 │   └── requirements.txt
 ├── api/                    # 레이어 B — 읽기 전용 FastAPI (M6)
 ├── frontend/               # 레이어 C — Vercel React(TS) 대시보드 (M7)
+│   └── src/lib/portfolio.ts    # 내 포트폴리오 계산·저장 순수 함수 (M10)
 ├── .github/workflows/      # cron 파이프라인 워크플로우 (M8)
 ├── .env.example            # 환경변수 문서 (실제 값 없음)
 └── README.md
@@ -137,6 +138,7 @@ FastAPI. Supabase 를 **읽기만** 하며 CORS 는 프론트 도메인만, GET 
 | GET | `/api/reports/{date}` | 특정일 리포트 |
 | GET | `/api/tickers/{symbol}/metrics?from=&to=` | 종목 시세·감정 시계열 |
 | GET | `/api/signals?date=&severity=` | 시그널 목록(필터) |
+| GET | `/api/quotes?symbols=&date=` | 최근 영업일 종가·등락률(포트폴리오 평가용) |
 
 **로컬 실행 / 테스트**
 ```bash
@@ -159,9 +161,25 @@ cd frontend
 npm install
 npm run dev        # http://localhost:5173 (개발 서버)
 npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
+npm test           # vitest — 포트폴리오 순수 함수 단위 테스트
 ```
 > 환경변수 `VITE_API_BASE` 로 백엔드 주소 주입(기본 `http://127.0.0.1:8000`).
 > 백엔드가 없어도 앱은 기동하며 각 섹션은 빈 상태/에러 안내로 gracefully 처리됩니다.
+
+### 내 포트폴리오 (보유 종목 관리)
+
+대시보드에서 보유 종목을 직접 입력해 **평가손익·수익률·비중**을 확인합니다.
+
+- **입력**: 종목코드 · 종목명 · 수량 · 평균 매입가 · 메모. 워치리스트 종목코드를 넣으면
+  종목명이 자동으로 채워지고(`datalist` 자동완성), `5930` 처럼 앞자리 0 을 빼도 `005930` 으로 정규화됩니다.
+- **평가**: `/api/quotes` 의 최근 영업일 종가로 평가금액 · 평가손익 · 수익률 · 비중 · 전일 대비 손익을 계산합니다.
+  워치리스트 밖 종목은 시세가 없어 "시세 없음"으로 표시되고 **수익률 분모에서 제외**됩니다.
+- **추가 매수**: 이미 담긴 종목을 다시 추가하면 수량가중 평단으로 합쳐집니다(물타기).
+- **시그널 연동**: 보유 종목에 감정 급변 시그널이 발화되면 행에 배지가 붙고 상단에 요약이 뜹니다.
+- **저장 위치**: 개인 매매 정보이므로 **브라우저 localStorage 에만** 저장되며 서버로 전송되지 않습니다.
+  덕분에 서빙 API 는 읽기 전용(하드룰 §4)을 유지합니다. 기기 간 이전은 JSON **내보내기/가져오기**로 합니다.
+
+> 계산 로직(`src/lib/portfolio.ts`)은 순수 함수로 분리돼 `npm test` 로 고정되어 있습니다.
 
 ---
 
@@ -196,6 +214,7 @@ npm run build      # tsc 타입체크 + 프로덕션 번들(dist/)
 | M7 | 프론트엔드 (Recharts) | ✅ |
 | M8 | GitHub Actions 워크플로우 | ✅ |
 | M9 | 배포 (Render + Vercel) | ✅ |
+| M10 | 내 포트폴리오 (보유·손익 관리) | ✅ |
 
 ---
 

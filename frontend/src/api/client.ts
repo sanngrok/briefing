@@ -54,6 +54,19 @@ export interface Movers {
   losers: Mover[]
 }
 
+export interface Quote {
+  symbol: string
+  name: string
+  date: string
+  close?: number | null
+  change_pct?: number | null
+}
+
+export interface Quotes {
+  date?: string | null
+  quotes: Quote[]
+}
+
 export interface NewsItem {
   title: string
   url?: string | null
@@ -94,6 +107,14 @@ export const api = {
     if (params?.limit) q.set('limit', String(params.limit))
     const qs = q.toString()
     return get<NewsItem[]>(`/api/news${qs ? `?${qs}` : ''}`)
+  },
+
+  quotes: (params?: { symbols?: string[]; date?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.symbols) q.set('symbols', params.symbols.join(','))
+    if (params?.date) q.set('date', params.date)
+    const qs = q.toString()
+    return get<Quotes>(`/api/quotes${qs ? `?${qs}` : ''}`)
   },
 
   signals: (params?: { date?: string; severity?: Severity }) => {
