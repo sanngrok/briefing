@@ -7,13 +7,13 @@
 
 ## 1. 한눈에 보기
 
-- **상태**: **M0~M10 전부 완료. 3개 레이어가 실제로 운영 중.**
+- **상태**: **M0~M11 전부 완료. 3개 레이어가 실제로 운영 중.**
 - **운영 주소**:
   - 프론트: https://briefing-lake.vercel.app
   - API: https://briefing-6pzj.onrender.com
   - 파이프라인: GitHub Actions cron (평일 16:00 KST)
 - **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
-- **테스트**: 파이프라인 단위 테스트 36개 + API 테스트 31개 + 프론트 단위 테스트 30개(vitest), 모두 키 없이 통과.
+- **테스트**: 파이프라인 36개 + API 31개 + 프론트 30개(vitest) + 증권사 동기화 14개, 모두 키 없이 통과.
 
 ---
 
@@ -54,6 +54,9 @@ briefing/
 ├── frontend/                  # 레이어 C (Vite + React + TS + Recharts)
 │   └── src/                   # App / api / components(SummaryStrip·SignalCard·SentimentChart·ReportView·PortfolioPanel·DisclaimerBadge)
 │       └── lib/portfolio.ts   # 내 포트폴리오 계산·저장 순수 함수 + portfolio.test.ts
+├── tools/                     # 내 PC 전용 (배포 안 됨)
+│   ├── toss_sync.py           # 토스증권 Open API → portfolio.json (M11)
+│   └── tests/test_toss_sync.py
 ├── .github/workflows/pipeline.yml   # cron + workflow_dispatch
 ├── .env.example               # 환경변수 문서
 └── README.md / PROGRESS.md
@@ -77,6 +80,7 @@ briefing/
 | — | UI 리디자인 (옵션 A) | ✅ | 요약 우선 KPI 대시보드, 라이트/다크 지원 |
 | **M9** | **배포** | ✅ | Render(API) + Vercel(프론트) + Actions Secrets 등록·실행 검증 |
 | **M10** | **내 포트폴리오** | ✅ | 보유 종목 CRUD + 평가손익·수익률·비중 + `/api/quotes` + vitest 30 |
+| **M11** | **토스증권 연동** | ✅ | `tools/toss_sync.py` (로컬 전용) — 실계좌 잔고 → portfolio.json → 가져오기 |
 
 ---
 
@@ -116,12 +120,32 @@ briefing/
 - 기기 간 이전은 JSON 내보내기/가져오기. 나중에 인증을 붙이면 이 JSON 형태
   (`{version, holdings}`)를 그대로 DB 로 옮기면 된다.
 
+### M11 — 증권사 연동을 왜 서버가 아니라 내 PC 에서 하나
+
+토스증권 Open API 는 `GET /api/v1/holdings` 로 보유 종목을 주고, 응답 필드가
+포트폴리오 형식과 거의 1:1 로 맞는다(`symbol` / `name` / `quantity` / `averagePurchasePrice`).
+문제는 **같은 Client ID/Secret 으로 주문도 나간다**는 점이다.
+
+- 이 대시보드는 로그인이 없는 공개 페이지다. 서버가 잔고를 내려주면 누구나 본다.
+- 그래서 키는 내 PC 의 `.env` 에만 두고, 스크립트가 만든 JSON 을 '가져오기' 로 넣는다.
+  M10 에서 만든 내보내기/가져오기 포맷이 그대로 연동 지점이 됐다.
+- 스크립트가 부르는 건 토큰 발급 + `/accounts` + `/holdings` 세 개뿐. 주문 엔드포인트는
+  코드에 등장하지 않는다.
+- 기본값은 국내(KRW) 종목만. 대시보드 합계·시세가 원화/KRX 기준이라 달러 종목을 섞으면
+  매입금액 합계가 통화 뒤섞인 값이 된다. `--include-us` 로 명시적으로만 포함한다.
+- 계좌번호는 로그에서 마스킹하고, 키·액세스 토큰은 출력·예외 메시지 어디에도 넣지 않는다.
+- 산출물 `portfolio.json` 은 실제 보유 정보라 `.gitignore` 대상이다.
+
+> API 스펙은 토스증권 공식 OpenAPI 1.1.1 문서 기준
+> (base `https://openapi.tossinvest.com`, 계좌 API 는 `x-tossinvest-account` 헤더 필요).
+
 ---
 
 ## 6. 하드 룰 준수 체크
 
 - ✅ 공개 데이터만 사용 · ✅ 투자 자문 아님 라벨(UI+리포트)
 - ✅ 개인 매매정보 비전송(포트폴리오는 브라우저 로컬 저장)
+- ✅ 증권사 자격증명은 로컬 `.env` 에만 · 동기화 스크립트는 조회(GET) 전용
 - ✅ 멱등성(UNIQUE+upsert) · ✅ 읽기/쓰기 분리(FastAPI는 SELECT만)
 - ✅ 비밀키 코드 미포함(.env / Secrets) · ✅ LLM 그라운딩(실데이터 JSON만 근거)
 - ✅ 비용 방어(url_hash dedup) · ✅ 작은 커밋, 항상 실행 가능 상태 유지
@@ -165,6 +189,10 @@ briefing/
 ## 8. 다음에 할 만한 것 / 주의사항
 
 ### 다음 후보
+- **동기화 자동화**: 지금은 수동 실행 + 가져오기. 내 PC 스케줄러(cron/작업스케줄러)로
+  장마감 후 `toss_sync.py` 를 돌리게 하면 파일은 갱신되지만, 브라우저 반영은 여전히 수동이다.
+  완전 자동화는 로그인이 생긴 뒤에 다루는 게 맞다.
+- **보유 종목 자동 워치리스트 편입**: 토스에서 가져온 종목이 워치리스트 밖이면 시세·뉴스가 없다.
 - **포트폴리오 기기 간 동기화**: 지금은 브라우저 로컬 저장. 동기화하려면 인증(Supabase Auth) +
   RLS 정책 + 쓰기 엔드포인트가 함께 필요하다. 현재 내보내기 JSON 형태가 그대로 스키마 후보.
 - **보유 종목 자동 워치리스트 편입**: 포트폴리오에 담았는데 워치리스트 밖이면 시세·뉴스가 없다.

@@ -51,6 +51,8 @@ briefing/
 ├── api/                    # 레이어 B — 읽기 전용 FastAPI (M6)
 ├── frontend/               # 레이어 C — Vercel React(TS) 대시보드 (M7)
 │   └── src/lib/portfolio.ts    # 내 포트폴리오 계산·저장 순수 함수 (M10)
+├── tools/                  # 내 PC 전용 유틸 (레포에 배포되지 않음)
+│   └── toss_sync.py        # 토스증권 잔고 → portfolio.json (M11)
 ├── .github/workflows/      # cron 파이프라인 워크플로우 (M8)
 ├── .env.example            # 환경변수 문서 (실제 값 없음)
 └── README.md
@@ -183,6 +185,51 @@ npm test           # vitest — 포트폴리오 순수 함수 단위 테스트
 
 ---
 
+## 증권사 연동 (토스증권 Open API, 내 PC 전용)
+
+보유 종목을 손으로 입력하는 대신 **실제 계좌 잔고를 읽어와** 대시보드에 넣을 수 있습니다.
+
+```
+[내 PC] tools/toss_sync.py ──(토스증권 Open API)──> portfolio.json
+                                                      │ '가져오기'
+                                                      ▼
+                                          [대시보드] 내 브라우저에만 저장
+```
+
+**왜 서버가 아니라 내 PC 인가** — 증권사 Client ID/Secret 은 조회뿐 아니라 **주문까지 나가는
+자격증명**입니다. 이 대시보드는 로그인이 없는 공개 페이지라, 서버에서 잔고를 내려주면 누구나
+볼 수 있습니다. 그래서 키는 내 PC 의 `.env` 에만 두고, 서빙 API 는 계속 읽기 전용으로 둡니다.
+
+**준비**
+1. 토스증권 앱 → 전체 → **Open API** → 신청 (Client ID/Secret 발급, 앱에서만 재확인 가능)
+2. `.env` 에 `TOSS_CLIENT_ID` / `TOSS_CLIENT_SECRET` 입력 (`.env` 는 `.gitignore`)
+
+**실행**
+```bash
+pip install -r tools/requirements.txt
+
+python tools/toss_sync.py                   # portfolio.json 생성
+python tools/toss_sync.py --list-accounts   # 계좌 목록 확인 (번호는 마스킹)
+python tools/toss_sync.py --account-no 12345678901
+python tools/toss_sync.py --include-us      # 해외(USD) 종목까지 포함
+```
+그다음 대시보드 **내 포트폴리오 → 가져오기** 에서 생성된 파일을 선택하면 반영됩니다.
+
+- 호출하는 것은 `GET /oauth2/token` · `/api/v1/accounts` · `/api/v1/holdings` **세 개뿐**입니다.
+  주문 엔드포인트는 스크립트 어디에서도 부르지 않습니다.
+- 기본값은 **국내(KRW) 종목만**입니다. 대시보드 합계가 원화 기준이라 달러 종목을 섞으면
+  매입금액 합계의 통화가 뒤섞이기 때문입니다. `--include-us` 로 포함할 수 있습니다.
+- 산출물 `portfolio.json` 은 실제 보유 정보라 `.gitignore` 에 들어 있습니다.
+- 계좌번호는 로그에 `1234***8901` 로 마스킹되고, 키·토큰은 출력되지 않습니다.
+
+```bash
+python -m pytest tools/tests -v   # 변환 로직 단위 테스트 (키·네트워크 불필요)
+```
+
+> 토스증권 Open API 문서: https://developers.tossinvest.com/docs
+
+---
+
 ## 자동화 (GitHub Actions, 레이어 A 실행)
 
 [.github/workflows/pipeline.yml](.github/workflows/pipeline.yml) 이 파이프라인을 실행합니다.
@@ -215,6 +262,7 @@ npm test           # vitest — 포트폴리오 순수 함수 단위 테스트
 | M8 | GitHub Actions 워크플로우 | ✅ |
 | M9 | 배포 (Render + Vercel) | ✅ |
 | M10 | 내 포트폴리오 (보유·손익 관리) | ✅ |
+| M11 | 토스증권 Open API 연동 (로컬 동기화) | ✅ |
 
 ---
 
