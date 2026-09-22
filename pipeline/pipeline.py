@@ -40,6 +40,7 @@ PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 �
 CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
 REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
 SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
+REPORT_ATTEMPTS = 2     # 리포트 형태가 아닌 응답을 받았을 때 재시도 포함 총 호출 횟수
 
 TODAY = date.today()
 
@@ -65,24 +66,65 @@ def get_ai():
     return _ai
 
 
-def _generate_text(model: str, prompt: str, max_tokens: int) -> str:
+def _finish_reason(resp):
+    """응답의 finish_reason 이름. 없으면 None. (잘림 판정·진단용)"""
+    if not resp.candidates:
+        return None
+    fr = getattr(resp.candidates[0], "finish_reason", None)
+    if fr is None:
+        return None
+    return getattr(fr, "name", None) or str(fr)
+
+
+def _thinking_rejected(err) -> bool:
+    """모델이 thinking_config 자체를 거부했는지(flash-lite 는 budget=0 을 400 으로 거부)."""
+    msg = str(err).lower()
+    return "thinking" in msg or "budget" in msg
+
+
+def _generate_text(model: str, prompt: str, max_tokens: int,
+                   disable_thinking: bool = False) -> str:
     """Gemini generate_content 호출 후 텍스트만 반환. (호출부 공통 헬퍼)
 
     Gemini 3.x 는 내부 '생각(thinking)' 토큰도 max_output_tokens 를 함께 소진한다.
-    이걸 thinking_config 로 끄는 건 모델마다 지원이 갈리므로(flash-lite 는 budget=0 을
-    400 으로 거부) 설정을 건드리지 않고 출력 한도를 넉넉히 잡아 답변이 잘리지 않게 한다.
-    빈 응답은 조용히 넘기지 않고 예외로 올려 호출부가 알아채게 한다.
+    한도에 걸리면 생각 도중 끊긴 텍스트가 `thought` 표시도 없이 본문으로 내려오기
+    때문에(실제로 2026-09-21 리포트가 모델의 자기검증 메모로 저장됐다) 출력 한도를
+    넉넉히 잡는 것만으로는 막히지 않는다. 그래서 두 가지를 둔다.
+
+    - 본문 품질이 중요한 호출은 `disable_thinking=True` 로 생각 자체를 끈다.
+      thinking_config 지원은 모델마다 갈리므로(flash-lite 는 budget=0 을 400 으로
+      거부) 거부되면 설정 없이 한 번 더 시도한다.
+    - finish_reason 이 MAX_TOKENS 면 잘린 응답이므로 예외로 올린다. 잘린 텍스트를
+      호출부가 정상 응답으로 오인해 저장하는 일을 막는다.
     """
     from google.genai import types
-    resp = get_ai().models.generate_content(
-        model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(max_output_tokens=max_tokens),
-    )
+
+    def _call(thinking_off: bool):
+        return get_ai().models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=max_tokens,
+                thinking_config=(types.ThinkingConfig(thinking_budget=0)
+                                 if thinking_off else None),
+            ),
+        )
+
+    try:
+        resp = _call(disable_thinking)
+    except Exception as e:
+        if not disable_thinking or not _thinking_rejected(e):
+            raise
+        print(f"[llm] {model} 이 thinking_config 를 거부함, 설정 없이 재시도: {e}")
+        resp = _call(False)
+
+    reason = _finish_reason(resp)
     text = resp.text
     if not text or not text.strip():
-        reason = getattr(resp.candidates[0], "finish_reason", None) if resp.candidates else None
         raise RuntimeError(f"빈 응답 (finish_reason={reason}, model={model})")
+    if reason == "MAX_TOKENS":
+        raise RuntimeError(
+            f"출력이 max_output_tokens={max_tokens} 에서 잘림 (model={model})")
     return text
 
 
@@ -348,6 +390,39 @@ REPORT_DISCLAIMER = (
     "> ⚠️ 본 리포트는 공개 데이터 기반의 정보 제공 목적이며, 투자 판단의 근거가 아닙니다."
 )
 
+# 프롬프트가 요구하는 리포트 제목. is_valid_report 가 이 형태를 확인한다.
+REPORT_HEADING = "## 오늘의 뉴스 감정 브리핑"
+MIN_REPORT_CHARS = 80   # 이보다 짧으면 본문이라 볼 수 없다
+
+
+def strip_markdown_fence(text: str) -> str:
+    """본문 전체를 ``` 코드펜스로 감싼 응답이면 펜스를 벗긴다. (순수 함수)
+
+    리포트는 마크다운 자체가 본문이다. 펜스가 남으면 대시보드에서 코드블록으로
+    렌더링되고, 제목으로 시작하지도 않아 is_valid_report 에서 헛되게 걸린다.
+    """
+    body = (text or "").strip()
+    if not body.startswith("```"):
+        return body
+    lines = body.splitlines()[1:]              # ```markdown 등 여는 줄 제거
+    if lines and lines[-1].strip() == "```":   # 닫는 줄 제거
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def is_valid_report(text) -> bool:
+    """리포트로 저장해도 되는 출력인지. (순수 함수)
+
+    모델이 리포트 대신 자기검증 메모를 내려보낸 적이 있어서, 저장 전에 '리포트의
+    형태인지'를 결정론적으로 확인한다. 프롬프트가 지시한 대로 마크다운 제목으로
+    시작하고 본문이라 할 만한 길이가 있어야 통과다. 메모나 생각 과정은 제목 없이
+    시작하므로 여기서 걸러진다.
+    """
+    if not text:
+        return False
+    body = text.strip()
+    return body.startswith("#") and len(body) >= MIN_REPORT_CHARS
+
 
 def build_report_payload(signals_rows, daily_rows, name_of, report_date):
     """리포트 LLM 에 넘길 근거 payload. 조회된 실제 행만으로 구성한다(그라운딩). (순수 함수)
@@ -380,7 +455,9 @@ def build_report_prompt(payload):
         "- 데이터에 없는 수치·전망·목표가·투자의견은 절대 쓰지 마라.\n"
         "- 각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n"
         "- 발화된 시그널이 없으면 '오늘은 감정 급변 시그널이 없습니다'라고 명시하라.\n"
-        "- 매수/매도 등 투자 권유 표현을 쓰지 마라.\n\n"
+        "- 매수/매도 등 투자 권유 표현을 쓰지 마라.\n"
+        "- 검토 과정·자기점검 메모를 쓰지 말고 리포트 본문만 출력하라.\n"
+        f"- 리포트는 `{REPORT_HEADING}` 제목으로 시작하라.\n\n"
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
 
@@ -393,7 +470,23 @@ def build_report(tickers):
 
     payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
     prompt = build_report_prompt(payload)
-    text = _generate_text(REPORT_MODEL, prompt, max_tokens=6000)
+
+    # 생각을 끈 상태로 뽑고, 그래도 리포트 형태가 아니면 한 번 더 시도한다.
+    # 두 번 다 실패하면 저장하지 않고 예외로 올린다 — 쓸 수 없는 본문으로 전날
+    # 리포트를 덮어쓰는 것보다, 잡이 실패해서 눈에 띄는 쪽이 낫다.
+    text = None
+    for attempt in range(1, REPORT_ATTEMPTS + 1):
+        candidate = strip_markdown_fence(
+            _generate_text(REPORT_MODEL, prompt, max_tokens=6000,
+                           disable_thinking=True))
+        if is_valid_report(candidate):
+            text = candidate
+            break
+        print(f"[report] 리포트 형태가 아닌 응답(시도 {attempt}): "
+              f"{candidate.strip()[:120]!r}")
+    if text is None:
+        raise RuntimeError("리포트 형태의 응답을 받지 못했다 — 저장하지 않고 중단한다")
+
     # §2 면책 라벨을 결정론적으로 부착
     body = text.rstrip() + "\n\n" + REPORT_DISCLAIMER
     get_sb().table("reports").upsert({

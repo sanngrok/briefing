@@ -1,7 +1,7 @@
 # 진행 상황 정리 (PROGRESS)
 
 > 금융/트렌드 AI 시그널 리포트 플랫폼 — 국내 주식 뉴스 감정 급변 시그널 대시보드
-> 최종 업데이트: 2026-09-21 · 리모트: `github.com/sanngrok/briefing` (main)
+> 최종 업데이트: 2026-09-22 · 리모트: `github.com/sanngrok/briefing` (main)
 
 ---
 
@@ -13,7 +13,7 @@
   - API: https://briefing-6pzj.onrender.com
   - 파이프라인: GitHub Actions cron (평일 16:00 KST)
 - **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
-- **테스트**: 파이프라인 49개 + API 31개 + 프론트 30개(vitest) + 증권사 동기화 14개, 모두 키 없이 통과.
+- **테스트**: 파이프라인 65개 + API 31개 + 프론트 34개(vitest) + 증권사 동기화 14개, 모두 키 없이 통과.
 - **시그널**: 2026-09-21 실행에서 **5건 발화 확인** (아래 §5-A). 기준선이 쌓여 규칙이 실제로 동작한다.
 
 ---
@@ -47,7 +47,7 @@ briefing/
 │   ├── seed_tickers.py        # 워치리스트 시드 (멱등) + 보유 종목 병합 (M12)
 │   ├── check_prices.py        # 시세 검증(키 불필요)
 │   ├── requirements.txt / requirements-dev.txt
-│   └── tests/                 # test_news_parse / test_signal / test_report / test_seed_tickers
+│   └── tests/                 # test_news_parse / test_signal / test_report / test_generate_text / test_seed_tickers
 ├── api/                       # 레이어 B (읽기 전용 FastAPI)
 │   ├── main.py config.py db.py models.py services.py
 │   ├── routers/               # reports / tickers / signals / news / movers / quotes
@@ -216,13 +216,55 @@ briefing/
    현재는 3.5 계열 사용.
 3. **무료 티어 15 RPM 제한** — 뉴스 40건을 연속 호출하면 대부분 429. `SENTIMENT_CALL_INTERVAL`(4.5초)로 간격 확보.
 4. **Gemini 3.x의 thinking 토큰이 `max_output_tokens`를 소진** — 리포트 본문이 잘리고 모델의
-   자기검증 메모만 저장되는 현상. `thinking_config=ThinkingConfig(thinking_budget=0)`으로 해결.
+   자기검증 메모만 저장되는 현상. 한 번 고쳤다가 되돌아왔고(§8-A), 현재는
+   리포트 호출만 `thinking_config=ThinkingConfig(thinking_budget=0)`으로 생각을 끄고,
+   `finish_reason == MAX_TOKENS`(잘린 응답)과 리포트 형태가 아닌 응답은 저장 전에 막는다.
+   `gemini-3.5-flash-lite`는 `thinking_budget=0`을 400으로 거부하므로, 거부되면 설정 없이
+   재시도하는 폴백을 뒀다(감정분석 경로는 생각을 켠 기본값 유지).
 5. **Supabase 자동 RLS** — 프로젝트 생성 시 "Enable automatic RLS"가 켜져 있으면 모든 테이블에
    RLS가 걸리고 정책이 없어 **anon 키로는 전 테이블 0건**이 된다(service_role은 우회하므로 눈치채기 어려움).
    공개 데이터만 다루므로 `alter table ... disable row level security`로 해제.
 6. **Vercel Deployment Protection** — 기본 활성 시 비로그인 방문자가 SSO 로그인으로 리다이렉트된다. 공개 대시보드이므로 해제 필요.
 7. **Vercel 환경변수 자동 제안** — 루트 `.env.example`을 읽어 백엔드 키까지 제안하지만,
    프론트에 필요한 건 `VITE_API_BASE` 하나뿐. 나머지는 넣지 말 것(불필요한 시크릿 확산).
+
+---
+
+## 8-A. 리포트 오염 재발과 실제 원인 (2026-09-22 수정)
+
+`/api/reports/latest` 가 2026-09-21 자 리포트로 **모델의 자기검증 메모 698자**를 내려주고 있었다
+(`* Note about "각 언급 끝에 ..." -> ... Let's double check the rules.`). 본문은 한 줄도 없었다.
+
+§7-B 4번에 "`thinking_budget=0`으로 해결"로 적혀 있었지만, 실제 코드는 그 설정을 쓰지 않고
+"출력 한도를 넉넉히(6000) 잡는" 방식으로 되돌아와 있었다. `flash-lite`가 `budget=0`을 400으로
+거부한 것이 계기였던 것으로 보이는데, 두 모델에 같은 헬퍼를 쓰다 보니 리포트 모델까지 생각이
+켜진 상태로 남았다.
+
+**왜 한도만 늘리면 안 되는가** — `google-genai`의 `resp.text`는 `thought=True` 파트를 이미
+걸러낸다(SDK 1.47 `_get_text`). 그런데 생각 도중 `max_output_tokens`에 걸리면, 끊긴 생각 텍스트가
+`thought` 표시 없이 **일반 본문으로** 내려온다. 저장된 본문이 `기준선은 0.0019047`에서 끊겨 있던
+것이 그 증거다. 기존 헬퍼는 **빈 응답만** 예외로 올렸기 때문에, 잘린 메모는 정상 응답으로
+취급돼 그대로 upsert 됐다.
+
+**수정 (3중 방어)**
+1. 리포트 호출은 `disable_thinking=True` — 생각 자체를 끈다(원인 제거). 모델이 거부하면
+   설정 없이 재시도하는 폴백.
+2. `finish_reason == MAX_TOKENS` 면 예외 — 잘린 응답을 호출부가 정상으로 오인하지 못하게.
+   감정분석 경로에도 함께 적용된다(기존엔 잘린 JSON이 파싱 실패로 조용히 중립 처리됐다).
+3. `is_valid_report()` — 마크다운 제목으로 시작하고 본문 길이가 있는지 확인. 통과하지 못하면
+   한 번 재시도하고, 그래도 아니면 **저장하지 않고 예외로 중단**한다. 쓸 수 없는 본문으로
+   전날 리포트를 덮어쓰는 것보다 잡이 실패해 눈에 띄는 쪽이 낫다.
+
+프롬프트에도 "리포트 본문만 출력", "`## 오늘의 뉴스 감정 브리핑` 제목으로 시작"을 명시해
+3번 검증과 짝을 맞췄다.
+
+> 이 현상은 **확률적**이다. 같은 프롬프트로 생각을 켜고 호출해도 깨끗한 리포트가 나오는 날이
+> 있다(검증 중 실제로 그랬다). 생각이 길어진 날에만 한도에 걸린다. 그래서 원인 제거(1)만으로
+> 끝내지 않고 저장 직전 검증(2·3)을 함께 뒀다.
+
+**DB에 남은 2026-09-21 리포트는 그대로 둔다.** 파이프라인은 날짜별 upsert(`date,scope`)라
+과거 날짜를 다시 쓰려면 수동 개입이 필요하고, 쓰기는 파이프라인의 책임이다(하드룰 §4).
+다음 실행(평일 16:00 KST)에서 2026-09-22 리포트가 생기면 `/api/reports/latest`가 그걸 내려준다.
 
 ---
 
