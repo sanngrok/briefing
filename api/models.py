@@ -91,3 +91,5 @@ class Quote(BaseModel):
 class Quotes(BaseModel):
     date: Optional[Date] = None
     quotes: list[Quote] = []
+    # True 면 close/change_pct 가 DB 종가가 아니라 장중 실시간(네이버, 비공식) 값이다.
+    live: bool = False

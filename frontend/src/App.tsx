@@ -26,6 +26,7 @@ export default function App() {
   const [holdings, setHoldings] = useState<Holding[]>(() => loadHoldings())
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [quoteDate, setQuoteDate] = useState<string | null>(null)
+  const [quotesLive, setQuotesLive] = useState(false)
   const [storageFailed, setStorageFailed] = useState(false)
 
   function updateHoldings(next: Holding[]) {
@@ -46,14 +47,32 @@ export default function App() {
     api.signals().then(setSignals).catch(() => setSignals([]))
     api.news({ limit: 12 }).then(setNews).catch(() => setNews([]))
     api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
-    // 포트폴리오 평가용 최근 영업일 종가 (워치리스트 전체를 한 번에)
-    api
-      .quotes()
-      .then((q) => {
-        setQuotes(q.quotes)
-        setQuoteDate(q.date ?? null)
-      })
-      .catch(() => setQuotes([]))
+  }, [])
+
+  // 포트폴리오 평가용 종가(워치리스트 전체를 한 번에). 장중엔 서버가 네이버
+  // 실시간 값을 덮어써 주므로, 여기서 주기적으로 다시 불러오면 "준실시간"이 된다
+  // — 장 마감 후에는 서버가 같은 DB 값을 그대로 돌려주니 폴링해도 무해하다.
+  useEffect(() => {
+    let cancelled = false
+    function loadQuotes() {
+      api
+        .quotes()
+        .then((q) => {
+          if (cancelled) return
+          setQuotes(q.quotes)
+          setQuoteDate(q.date ?? null)
+          setQuotesLive(q.live ?? false)
+        })
+        .catch(() => {
+          if (!cancelled) setQuotes([])
+        })
+    }
+    loadQuotes()
+    const id = window.setInterval(loadQuotes, 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
   }, [])
 
   useEffect(() => {
@@ -95,6 +114,7 @@ export default function App() {
           onChange={updateHoldings}
           quotes={quotes}
           quoteDate={quoteDate}
+          quotesLive={quotesLive}
           tickers={tickers}
           signals={signals}
           storageFailed={storageFailed}
