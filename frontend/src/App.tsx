@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
 import type { Movers, NewsItem, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { DisclaimerBadge } from './components/DisclaimerBadge'
@@ -11,7 +11,7 @@ import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
 import type { Holding } from './lib/portfolio'
-import { isMarketLiveWindow } from './lib/market'
+import { isMarketLiveWindow, isUsMarketWindow, isWorldSymbol } from './lib/market'
 
 // 장중엔 15초마다 새로 부른다(서버가 네이버 실시간 값을 덮어써 주므로).
 const QUOTE_POLL_MS = 15000
@@ -35,6 +35,13 @@ export default function App() {
   const [quoteDate, setQuoteDate] = useState<string | null>(null)
   const [quotesLive, setQuotesLive] = useState(false)
   const [storageFailed, setStorageFailed] = useState(false)
+
+  // 해외 종목을 들고 있을 때만 미국 장 시간(한국 새벽)에도 폴링한다.
+  // 폴링 루프가 effect 안에 갇혀 있어 최신 값을 ref 로 건넨다.
+  const hasWorldHoldingRef = useRef(false)
+  useEffect(() => {
+    hasWorldHoldingRef.current = holdings.some((h) => isWorldSymbol(h.symbol))
+  }, [holdings])
 
   function updateHoldings(next: Holding[]) {
     setHoldings(next)
@@ -62,6 +69,9 @@ export default function App() {
   // 다만 장 시간 밖이나 탭이 가려져 있을 때는 부르지 않는다. 그때는 서버가 같은 DB
   // 값을 돌려줄 뿐이라 값이 변하지 않는데, 요청이 계속 가면 무료 인스턴스가 잠들지
   // 못해 쿼터만 쓴다(탭 하나를 하루 종일 열어두면 한 달치를 거의 다 쓴다).
+  //
+  // 해외 종목을 들고 있으면 미국 정규장(한국 새벽)에도 돈다 — 그때가 해외 종목이
+  // 실제로 움직이는 시간이다.
   useEffect(() => {
     let cancelled = false
     let timer: number | undefined
@@ -81,7 +91,9 @@ export default function App() {
     }
 
     function shouldPoll() {
-      return !document.hidden && isMarketLiveWindow()
+      if (document.hidden) return false
+      if (isMarketLiveWindow()) return true
+      return hasWorldHoldingRef.current && isUsMarketWindow()
     }
 
     function schedule() {
