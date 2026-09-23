@@ -124,3 +124,47 @@ def build_quotes(rows: list, symbols: list | None = None) -> list:
             seen.add(s)
             out.append(by_symbol[s])
     return out
+
+
+def merge_live_quotes(quotes: list, live_map: dict, symbols: list | None,
+                      today) -> list:
+    """DB 시세에 장중 실시간 값을 덮어쓰고, DB 에 없는 종목은 실시간 값만으로 채운다. (순수 함수)
+
+    build_quotes 는 DB 시세 행에서 목록을 만들기 때문에, 워치리스트 밖 보유 종목처럼
+    시세 행이 없는 종목은 조용히 빠진다. 그러면 장중에도 대시보드에 "시세 없음"으로
+    남는다 — 네이버는 그 종목의 현재가를 알고 있는데도. 그래서 요청받은 종목
+    (`symbols`)을 기준으로 다시 훑어, 실시간 값이 있으면 행을 만들어 끼운다.
+
+    - `symbols` 가 None(워치리스트 전체 조회)이면 끼워 넣을 대상이 없으므로 덮어쓰기만 한다.
+    - 새로 만든 행의 날짜는 기준일이 아니라 `today` 다. 실시간 값은 오늘 것이기 때문.
+    - 실시간 값도 DB 행도 없는 종목은 그대로 빠진다("시세 없음" 표시는 프론트 책임).
+    """
+    def overwritten(q: dict) -> dict:
+        live = live_map.get(q["symbol"])
+        if not live:
+            return q
+        return {**q, "close": live["close"], "change_pct": live.get("change_pct")}
+
+    if symbols is None:
+        return [overwritten(q) for q in quotes]
+
+    by_symbol = {q["symbol"]: q for q in quotes}
+    out: list = []
+    seen: set[str] = set()
+    for s in symbols:
+        if s in seen:
+            continue
+        seen.add(s)
+        if s in by_symbol:
+            out.append(overwritten(by_symbol[s]))
+            continue
+        live = live_map.get(s)
+        if live:
+            out.append({
+                "symbol": s,
+                "name": live.get("name") or "",
+                "date": today,
+                "close": live["close"],
+                "change_pct": live.get("change_pct"),
+            })
+    return out

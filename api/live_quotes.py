@@ -11,7 +11,9 @@ pykrx/KRX 는 당일 시세를 저녁 6시 이후에야 확정해서 내려준�
 둔다.
 """
 
+import re
 import time
+from datetime import date as Date
 from datetime import datetime
 from datetime import time as dtime
 from zoneinfo import ZoneInfo
@@ -23,7 +25,16 @@ NAVER_QUOTE_URL = "https://polling.finance.naver.com/api/realtime/domestic/stock
 MAX_SYMBOLS_PER_CALL = 50   # 네이버 페이지 자체도 워치리스트를 한 번에 묶어 부른다
 CACHE_TTL_SECONDS = 5       # 여러 브라우저가 동시에 폴링해도 네이버는 5초에 한 번만 호출
 
+# 이 엔드포인트는 국내(KRX) 6자리 코드만 받는다. 보유 종목에는 해외 티커(AAPL)나
+# 오타가 섞일 수 있으므로, 물어봐야 소용없는 것은 호출 전에 걸러낸다.
+KRX_CODE = re.compile(r"^\d{6}$")
+
 _cache: dict = {}
+
+
+def kst_today() -> Date:
+    """지금 한국 날짜. DB 행이 없는 종목에 실시간 값만으로 시세를 만들 때 쓴다."""
+    return datetime.now(KST).date()
 
 
 def is_market_live_window(now: datetime = None) -> bool:
@@ -45,10 +56,13 @@ def _to_float(s):
 
 
 def fetch_live_quotes(symbols: list) -> dict:
-    """symbol -> {"close", "change_pct"} 매핑. 실패하면(네트워크·스키마 변경) 빈 dict.
+    """symbol -> {"close", "change_pct", "name"} 매핑. 실패하면(네트워크·스키마 변경) 빈 dict.
 
     등락률(fluctuationsRatio)은 네이버 응답에 이미 부호가 들어 있다(하락은 음수).
+    종목명(stockName)도 함께 돌려주는 이유는, 워치리스트 밖 보유 종목처럼 DB 행이
+    없어 이름을 채울 데가 없는 경우가 있기 때문이다.
     """
+    symbols = [s for s in (symbols or []) if KRX_CODE.match(s)]
     if not symbols:
         return {}
 
@@ -71,7 +85,11 @@ def fetch_live_quotes(symbols: list) -> dict:
                 close = _to_float(item.get("closePrice"))
                 if not code or close is None:
                     continue
-                out[code] = {"close": close, "change_pct": _to_float(item.get("fluctuationsRatio"))}
+                out[code] = {
+                    "close": close,
+                    "change_pct": _to_float(item.get("fluctuationsRatio")),
+                    "name": item.get("stockName") or "",
+                }
         except Exception:
             continue   # 이 청크만 스킵 — 나머지 종목은 DB 폴백으로 채워진다
 

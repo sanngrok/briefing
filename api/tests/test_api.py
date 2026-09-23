@@ -7,6 +7,8 @@ FastAPI dependency_overrides 로 가짜 repo 를 주입해 라우팅·검증·�
 실행:  python -m pytest api/tests -v   (repo 루트에서)
 """
 
+from datetime import date as Date
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,6 +16,7 @@ from api.main import app
 from api.db import get_repo
 from api.services import (
     build_quotes,
+    merge_live_quotes,
     merge_metric_series,
     rank_news,
     split_movers,
@@ -345,3 +348,109 @@ def test_build_quotes_pure_sorts_by_symbol_when_unfiltered():
         {"date": "d", "tickers": {"symbol": "a", "name": "A"}},
     ]
     assert [q["symbol"] for q in build_quotes(rows)] == ["a", "b"]
+
+
+# ---- 워치리스트 밖 보유 종목도 장중엔 실시간으로 (DB 행이 없어도) ----
+def _live_on(monkeypatch, live_map, seen=None):
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: True)
+    monkeypatch.setattr("api.routers.quotes.kst_today", lambda: Date(2026, 7, 25))
+
+    def fake(symbols):
+        if seen is not None:
+            seen.append(list(symbols))
+        return live_map
+
+    monkeypatch.setattr("api.routers.quotes.fetch_live_quotes", fake)
+
+
+def test_quotes_live_fills_symbol_missing_from_db(monkeypatch):
+    """보유 중이지만 워치리스트 밖이라 DB 시세가 없는 종목도 실시간 값으로 채운다."""
+    _live_on(monkeypatch, {
+        "005930": {"close": 280000.0, "change_pct": 2.19, "name": "삼성전자"},
+        "068270": {"close": 195000.0, "change_pct": -1.3, "name": "셀트리온"},
+    })
+    body = client.get("/api/quotes?symbols=005930,068270").json()
+    assert body["live"] is True
+    assert [q["symbol"] for q in body["quotes"]] == ["005930", "068270"]
+
+    filled = body["quotes"][1]
+    assert filled["name"] == "셀트리온"        # 이름은 네이버 응답에서 온다
+    assert filled["close"] == 195000.0
+    assert filled["change_pct"] == -1.3
+    assert filled["date"] == "2026-07-25"      # 기준일이 아니라 오늘(실시간 값이므로)
+
+
+def test_quotes_live_asks_naver_for_symbols_missing_from_db(monkeypatch):
+    """DB 행이 없어 build_quotes 에서 빠진 종목도 네이버에는 물어봐야 한다."""
+    seen = []
+    _live_on(monkeypatch, {}, seen)
+    client.get("/api/quotes?symbols=005930,068270")
+    assert seen == [["005930", "068270"]]
+
+
+def test_quotes_live_skips_symbol_with_neither_db_nor_live(monkeypatch):
+    """DB 에도 없고 네이버도 모르는 종목은 그대로 빠진다(404 아님)."""
+    _live_on(monkeypatch, {"005930": {"close": 280000.0, "change_pct": 2.19,
+                                      "name": "삼성전자"}})
+    body = client.get("/api/quotes?symbols=005930,999999").json()
+    assert [q["symbol"] for q in body["quotes"]] == ["005930"]
+
+
+def test_quotes_live_watchlist_wide_still_overlays(monkeypatch):
+    """symbols 미지정(워치리스트 전체)이면 끼워 넣을 대상이 없고 덮어쓰기만 한다."""
+    _live_on(monkeypatch, {"005930": {"close": 280000.0, "change_pct": 2.19,
+                                      "name": "삼성전자"}})
+    body = client.get("/api/quotes").json()
+    assert len(body["quotes"]) == 4                     # FakeRepo 의 4종목 그대로
+    got = {q["symbol"]: q["close"] for q in body["quotes"]}
+    assert got["005930"] == 280000.0                    # 덮어써짐
+    assert got["000660"] == 200                         # 실시간 값 없으면 DB 값
+
+
+# ---- merge_live_quotes (순수 함수) ----
+DB_ROWS = [
+    {"symbol": "005930", "name": "삼성전자", "date": "2026-07-24", "close": 100,
+     "change_pct": 1.0},
+]
+TODAY = Date(2026, 7, 25)
+
+
+def test_merge_overwrites_db_row_with_live_value():
+    out = merge_live_quotes(
+        DB_ROWS, {"005930": {"close": 280000.0, "change_pct": 2.19}},
+        ["005930"], TODAY)
+    assert out[0]["close"] == 280000.0 and out[0]["change_pct"] == 2.19
+    assert out[0]["date"] == "2026-07-24"      # DB 행의 기준일은 유지
+
+
+def test_merge_keeps_db_row_when_no_live_value():
+    out = merge_live_quotes(DB_ROWS, {}, ["005930"], TODAY)
+    assert out[0]["close"] == 100
+
+
+def test_merge_preserves_requested_order_and_dedups():
+    live = {"068270": {"close": 1.0, "change_pct": 0.0, "name": "셀트리온"}}
+    out = merge_live_quotes(DB_ROWS, live, ["068270", "005930", "068270"], TODAY)
+    assert [q["symbol"] for q in out] == ["068270", "005930"]
+
+
+def test_merge_without_symbols_only_overwrites():
+    """워치리스트 전체 조회(symbols=None)에는 새 행을 만들지 않는다."""
+    live = {"005930": {"close": 9.0, "change_pct": 0.0},
+            "068270": {"close": 1.0, "change_pct": 0.0, "name": "셀트리온"}}
+    out = merge_live_quotes(DB_ROWS, live, None, TODAY)
+    assert [q["symbol"] for q in out] == ["005930"]
+    assert out[0]["close"] == 9.0
+
+
+def test_merge_does_not_mutate_input_rows():
+    rows = [dict(DB_ROWS[0])]
+    merge_live_quotes(rows, {"005930": {"close": 9.0, "change_pct": 0.0}},
+                      ["005930"], TODAY)
+    assert rows[0]["close"] == 100
+
+
+def test_merge_filled_row_falls_back_to_blank_name():
+    live = {"068270": {"close": 1.0, "change_pct": None}}   # name 없음
+    out = merge_live_quotes([], live, ["068270"], TODAY)
+    assert out[0]["name"] == "" and out[0]["change_pct"] is None

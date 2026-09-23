@@ -6,7 +6,8 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from api.live_quotes import _to_float, is_market_live_window
+import api.live_quotes as lq
+from api.live_quotes import _to_float, fetch_live_quotes, is_market_live_window
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -58,3 +59,58 @@ def test_to_float_none_and_blank():
 
 def test_to_float_non_numeric_is_none():
     assert _to_float("N/A") is None
+
+
+# --- KRX 6자리 코드만 묻는다 (네트워크 불필요) --------------------------
+
+def test_fetch_skips_non_krx_symbols_without_calling(monkeypatch):
+    """해외 티커·오타는 이 엔드포인트가 모른다. 남는 게 없으면 호출 자체를 안 한다."""
+    called = []
+    monkeypatch.setattr(lq, "_cache", {})
+    monkeypatch.setitem(__import__("sys").modules, "requests",
+                        type("M", (), {"get": lambda *a, **k: called.append(a)})())
+    assert fetch_live_quotes(["AAPL", "TSLA", "00593"]) == {}
+    assert called == []
+
+
+def test_fetch_empty_input_returns_empty():
+    assert fetch_live_quotes([]) == {}
+    assert fetch_live_quotes(None) == {}
+
+
+def test_fetch_returns_name_close_and_change(monkeypatch):
+    """DB 행이 없는 종목을 채우려면 종목명도 함께 필요하다."""
+    monkeypatch.setattr(lq, "_cache", {})
+
+    class FakeRes:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"datas": [
+                {"itemCode": "068270", "stockName": "셀트리온",
+                 "closePrice": "195,000", "fluctuationsRatio": "-1.30"},
+            ]}
+
+    monkeypatch.setitem(__import__("sys").modules, "requests",
+                        type("M", (), {"get": staticmethod(lambda *a, **k: FakeRes())})())
+    out = fetch_live_quotes(["068270", "AAPL"])     # 해외 티커는 걸러지고
+    assert out == {"068270": {"close": 195000.0, "change_pct": -1.3,
+                              "name": "셀트리온"}}
+
+
+def test_fetch_network_failure_returns_empty(monkeypatch):
+    """비공식 API라 언제든 막힐 수 있다 — 조용히 빈 dict(호출부가 DB 값으로 폴백)."""
+    monkeypatch.setattr(lq, "_cache", {})
+
+    def boom(*a, **k):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setitem(__import__("sys").modules, "requests",
+                        type("M", (), {"get": staticmethod(boom)})())
+    assert fetch_live_quotes(["005930"]) == {}
+
+
+# --- kst_today ---------------------------------------------------------
+
+def test_kst_today_is_seoul_date():
+    from api.live_quotes import kst_today
+    assert kst_today() == datetime.now(KST).date()
