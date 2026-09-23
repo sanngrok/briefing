@@ -114,3 +114,108 @@ def test_fetch_network_failure_returns_empty(monkeypatch):
 def test_kst_today_is_seoul_date():
     from api.live_quotes import kst_today
     assert kst_today() == datetime.now(KST).date()
+
+
+# --- 해외(미국) 종목 --------------------------------------------------
+
+def _stub_requests(monkeypatch, *, fx=1300.0, datas=None, boom=False):
+    """환율 API 와 네이버 해외 시세를 URL 로 구분해 응답하는 가짜 requests."""
+    monkeypatch.setattr(lq, "_world_cache", {})
+    monkeypatch.setattr(lq, "_fx_cache", {})
+    seen = {"urls": []}
+
+    class Res:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._payload
+
+    def get(url, params=None, timeout=None):
+        seen["urls"].append(url)
+        if boom:
+            raise RuntimeError("connection reset")
+        if url.startswith(lq.FX_API_URL):
+            return Res({"rates": {"KRW": fx}} if fx else {"rates": {}})
+        return Res({"datas": datas or []})
+
+    monkeypatch.setitem(__import__("sys").modules, "requests",
+                        type("M", (), {"get": staticmethod(get)})())
+    return seen
+
+
+def test_world_candidates_covers_nasdaq_and_nyse():
+    """나스닥은 `AAPL.O`, 뉴욕은 접미사 없는 평문(`JPM`)이 조회 키다."""
+    assert lq.world_candidates("AAPL") == ["AAPL.O", "AAPL"]
+
+
+def test_is_krx_code_splits_domestic_and_world():
+    assert lq.is_krx_code("005930") and not lq.is_krx_code("AAPL")
+    assert not lq.is_krx_code("00593") and not lq.is_krx_code("")
+
+
+def test_world_converts_usd_to_krw(monkeypatch):
+    """대시보드 합계가 원화 기준이라, 달러 시세는 환산해서 내려야 한다."""
+    _stub_requests(monkeypatch, fx=1300.0, datas=[
+        {"symbolCode": "AAPL", "stockName": "애플", "closePrice": "339.75",
+         "fluctuationsRatio": "0.23", "marketStatus": "CLOSE"},
+    ])
+    out = lq.fetch_world_quotes(["AAPL"])
+    assert out["AAPL"]["close"] == 339.75 * 1300.0
+    assert out["AAPL"]["change_pct"] == 0.23     # 등락률은 종목 자체 값(환율 무관)
+    assert out["AAPL"]["name"] == "애플"
+    assert out["AAPL"]["market_open"] is False
+
+
+def test_world_market_open_from_market_status(monkeypatch):
+    """서머타임 때문에 한국 기준 개장 시각이 밀리므로, 네이버의 판단을 그대로 쓴다."""
+    _stub_requests(monkeypatch, datas=[
+        {"symbolCode": "AAPL", "stockName": "애플", "closePrice": "1",
+         "fluctuationsRatio": "0", "marketStatus": "OPEN"},
+    ])
+    assert lq.fetch_world_quotes(["AAPL"])["AAPL"]["market_open"] is True
+
+
+def test_world_returns_empty_without_fx_rate(monkeypatch):
+    """환율을 못 구하면 통화가 뒤섞이므로 아예 내리지 않는다(가져오기 스냅샷으로 폴백)."""
+    seen = _stub_requests(monkeypatch, fx=None, datas=[
+        {"symbolCode": "AAPL", "stockName": "애플", "closePrice": "339.75",
+         "fluctuationsRatio": "0.23", "marketStatus": "OPEN"},
+    ])
+    assert lq.fetch_world_quotes(["AAPL"]) == {}
+    assert all(u.startswith(lq.FX_API_URL) for u in seen["urls"])   # 시세는 묻지도 않는다
+
+
+def test_world_skips_krx_codes(monkeypatch):
+    """국내 코드는 국내 엔드포인트 담당이다. 남는 게 없으면 호출 자체를 안 한다."""
+    seen = _stub_requests(monkeypatch)
+    assert lq.fetch_world_quotes(["005930", "000660"]) == {}
+    assert seen["urls"] == []
+
+
+def test_world_keeps_first_candidate_when_both_match(monkeypatch):
+    """`AAPL.O` 와 `AAPL` 이 모두 응답에 오면 먼저 온 것 하나만 쓴다."""
+    _stub_requests(monkeypatch, fx=1000.0, datas=[
+        {"symbolCode": "AAPL", "stockName": "애플", "closePrice": "1",
+         "fluctuationsRatio": "0", "marketStatus": "CLOSE"},
+        {"symbolCode": "AAPL", "stockName": "애플(중복)", "closePrice": "2",
+         "fluctuationsRatio": "0", "marketStatus": "CLOSE"},
+    ])
+    out = lq.fetch_world_quotes(["AAPL"])
+    assert len(out) == 1 and out["AAPL"]["close"] == 1000.0
+
+
+def test_world_network_failure_returns_empty(monkeypatch):
+    _stub_requests(monkeypatch, boom=True)
+    assert lq.fetch_world_quotes(["AAPL"]) == {}
+
+
+def test_fx_rate_is_cached(monkeypatch):
+    """환율은 하루 단위 값이라 매 요청마다 부르지 않는다."""
+    seen = _stub_requests(monkeypatch, fx=1300.0, datas=[])
+    assert lq.fetch_usd_krw() == 1300.0
+    assert lq.fetch_usd_krw() == 1300.0
+    assert len(seen["urls"]) == 1

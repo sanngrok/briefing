@@ -6,6 +6,9 @@
 기본(날짜 미지정) 조회는 장중~시간외 단일가 시간대에 네이버 금융 실시간(비공식)
 값으로 덮어써 "준실시간"을 낸다 — api/live_quotes.py 참고. 이때 DB 시세가 없는
 종목(워치리스트 밖 보유 종목)도 실시간 값만으로 채워 준다.
+
+해외(미국) 종목은 DB 에 아예 없으므로 네이버 해외 시세로만 채우며, 미국 장이 한국
+새벽인 탓에 시간대로 거르지 않는다. 금액은 원화로 환산해서 내린다.
 """
 
 from datetime import date as Date
@@ -14,7 +17,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from api.db import ReadRepo, get_repo
-from api.live_quotes import fetch_live_quotes, is_market_live_window, kst_today
+from api.live_quotes import (fetch_live_quotes, fetch_world_quotes,
+                             is_market_live_window, kst_today)
 from api.models import Quotes
 from api.services import build_quotes, merge_live_quotes
 
@@ -55,13 +59,28 @@ def list_quotes(
     quotes = build_quotes(repo.prices_on(target), wanted)
 
     live = False
-    if date is None and is_market_live_window():
+    if date is None:
         # 요청받은 종목 전부를 묻는다 — DB 시세 행이 없어 build_quotes 에서 빠진
-        # 종목(워치리스트 밖 보유 종목)도 실시간 값으로 채워 넣기 위해서다.
+        # 종목(워치리스트 밖 보유 종목, 해외 종목)도 채워 넣기 위해서다.
         ask = wanted if wanted is not None else [q["symbol"] for q in quotes]
-        live_map = fetch_live_quotes(ask)
+        live_map: dict = {}
+
+        # 국내: 한국 장 시간대에만 덮어쓴다. 그 밖의 시간엔 DB 종가가 이미 그날
+        # 확정값이라 덮어쓸 이유가 없다.
+        if is_market_live_window():
+            domestic = fetch_live_quotes(ask)
+            live_map.update(domestic)
+            live = live or bool(domestic)
+
+        # 해외: 시간대로 거르지 않는다. 미국 장은 한국 새벽이라 낮에 물으면 늘 마감
+        # 상태지만, 그때 받는 직전 종가도 '가져오기 시점에 박제된 값'보다는 최신이다.
+        # 다만 live(=실시간) 로 표시하는 것은 실제로 장이 열려 있을 때뿐이다.
+        world = fetch_world_quotes(ask)
+        if world:
+            live_map.update(world)
+            live = live or any(w["market_open"] for w in world.values())
+
         if live_map:
-            live = True
             quotes = merge_live_quotes(quotes, live_map, wanted, kst_today())
 
     return {"date": target, "quotes": quotes, "live": live}

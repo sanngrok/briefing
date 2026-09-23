@@ -90,8 +90,13 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def _quotes_never_live_by_default(monkeypatch):
-    """실제 현재 시각·네트워크에 좌우되지 않도록, 명시적으로 켜는 테스트 외엔 항상 꺼둔다."""
+    """실제 현재 시각·네트워크에 좌우되지 않도록, 명시적으로 켜는 테스트 외엔 항상 꺼둔다.
+
+    해외 조회는 시간대로 거르지 않으므로(미국 장은 한국 새벽) 여기서 막지 않으면
+    테스트가 네이버를 실제로 부른다.
+    """
     monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: False)
+    monkeypatch.setattr("api.routers.quotes.fetch_world_quotes", lambda symbols: {})
 
 
 # --- health ----------------------------------------------------------
@@ -454,3 +459,68 @@ def test_merge_filled_row_falls_back_to_blank_name():
     live = {"068270": {"close": 1.0, "change_pct": None}}   # name 없음
     out = merge_live_quotes([], live, ["068270"], TODAY)
     assert out[0]["name"] == "" and out[0]["change_pct"] is None
+
+
+# ---- 해외 종목 (네이버 해외 시세, 원화 환산) ----
+def _world_on(monkeypatch, world_map, seen=None):
+    """해외 응답만 주입한다. 국내 장 시간대는 꺼진 채로 둔다(기본 fixture)."""
+    monkeypatch.setattr("api.routers.quotes.kst_today", lambda: Date(2026, 7, 25))
+
+    def fake(symbols):
+        if seen is not None:
+            seen.append(list(symbols))
+        return world_map
+
+    monkeypatch.setattr("api.routers.quotes.fetch_world_quotes", fake)
+
+
+def test_quotes_fills_world_symbol_even_outside_korean_hours(monkeypatch):
+    """미국 장은 한국 새벽이라, 국내 장 시간대가 아니어도 해외 시세는 채운다."""
+    _world_on(monkeypatch, {
+        "AAPL": {"close": 460751.96, "change_pct": 0.23, "name": "애플",
+                 "market_open": False},
+    })
+    body = client.get("/api/quotes?symbols=005930,AAPL").json()
+    assert [q["symbol"] for q in body["quotes"]] == ["005930", "AAPL"]
+    aapl = body["quotes"][1]
+    assert aapl["name"] == "애플"
+    assert aapl["close"] == 460751.96        # 원화 환산된 값
+    assert body["quotes"][0]["close"] == 100  # 국내는 장 시간대가 아니라 DB 값 그대로
+
+
+def test_quotes_world_market_closed_is_not_reported_live(monkeypatch):
+    """장이 닫혀 있으면 값은 채우되 live 로 표시하지 않는다."""
+    _world_on(monkeypatch, {"AAPL": {"close": 1.0, "change_pct": 0.0, "name": "애플",
+                                     "market_open": False}})
+    assert client.get("/api/quotes?symbols=AAPL").json()["live"] is False
+
+
+def test_quotes_world_market_open_is_reported_live(monkeypatch):
+    """미국 장이 열려 있으면 live=True — 프론트가 폴링을 이어갈 근거가 된다."""
+    _world_on(monkeypatch, {"AAPL": {"close": 1.0, "change_pct": 0.0, "name": "애플",
+                                     "market_open": True}})
+    assert client.get("/api/quotes?symbols=AAPL").json()["live"] is True
+
+
+def test_quotes_explicit_date_skips_world_too(monkeypatch):
+    """과거 날짜 조회에는 해외 시세도 묻지 않는다."""
+    seen = []
+    _world_on(monkeypatch, {}, seen)
+    assert client.get("/api/quotes?date=2026-07-24&symbols=AAPL").json()["live"] is False
+    assert seen == []
+
+
+def test_quotes_mixed_domestic_and_world(monkeypatch):
+    """국내 실시간과 해외를 함께 내려도 요청 순서가 유지된다."""
+    monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: True)
+    monkeypatch.setattr(
+        "api.routers.quotes.fetch_live_quotes",
+        lambda symbols: {"005930": {"close": 280000.0, "change_pct": 2.19,
+                                    "name": "삼성전자"}},
+    )
+    _world_on(monkeypatch, {"AAPL": {"close": 460751.96, "change_pct": 0.23,
+                                     "name": "애플", "market_open": True}})
+    body = client.get("/api/quotes?symbols=AAPL,005930").json()
+    assert [q["symbol"] for q in body["quotes"]] == ["AAPL", "005930"]
+    assert body["quotes"][1]["close"] == 280000.0
+    assert body["live"] is True

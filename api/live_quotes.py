@@ -11,6 +11,7 @@ pykrx/KRX 는 당일 시세를 저녁 6시 이후에야 확정해서 내려준�
 둔다.
 """
 
+import os
 import re
 import time
 from datetime import date as Date
@@ -22,12 +23,37 @@ KST = ZoneInfo("Asia/Seoul")
 _LIVE_WINDOW = (dtime(9, 0), dtime(18, 0))   # 정규장 09:00~15:30 + 시간외 단일가 ~18:00
 
 NAVER_QUOTE_URL = "https://polling.finance.naver.com/api/realtime/domestic/stock"
+# 해외(미국) 종목. 조회 키가 로이터 코드라 나스닥은 `AAPL.O`, 뉴욕은 접미사 없이 `JPM` 이다.
+NAVER_WORLD_URL = "https://polling.finance.naver.com/api/realtime/worldstock/stock"
+# 달러 시세를 원화로 환산할 공개 환율 API (인증 불필요, tools/toss_sync.py 와 같은 출처).
+FX_API_URL = os.environ.get("FX_API_URL", "https://api.frankfurter.dev/v1/latest")
 MAX_SYMBOLS_PER_CALL = 50   # 네이버 페이지 자체도 워치리스트를 한 번에 묶어 부른다
 CACHE_TTL_SECONDS = 5       # 여러 브라우저가 동시에 폴링해도 네이버는 5초에 한 번만 호출
 
 # 이 엔드포인트는 국내(KRX) 6자리 코드만 받는다. 보유 종목에는 해외 티커(AAPL)나
 # 오타가 섞일 수 있으므로, 물어봐야 소용없는 것은 호출 전에 걸러낸다.
 KRX_CODE = re.compile(r"^\d{6}$")
+
+WORLD_CACHE_TTL_SECONDS = 30    # 네이버가 권하는 해외 폴링 주기가 70초라 국내보다 느슨하게
+FX_CACHE_TTL_SECONDS = 3600     # 환율은 하루 단위 값이라 한 시간이면 충분하다
+
+_world_cache: dict = {}
+_fx_cache: dict = {}
+
+
+def is_krx_code(symbol: str) -> bool:
+    """국내(KRX) 6자리 코드인지. 아니면 해외 티커로 본다."""
+    return bool(KRX_CODE.match(symbol or ""))
+
+
+def world_candidates(symbol: str) -> list:
+    """해외 티커 하나를 네이버가 아는 조회 키 후보로. 나스닥은 `.O`, 뉴욕은 평문이다.
+
+    토스가 주는 건 `AAPL` 같은 평문이라 어느 거래소인지 알 수 없다. 둘 다 후보로
+    넣어 한 번에 묻고, 응답의 symbolCode 로 원래 티커에 되맞춘다(없는 키는 그냥
+    응답에서 빠진다).
+    """
+    return [f"{symbol}.O", symbol]
 
 _cache: dict = {}
 
@@ -94,4 +120,89 @@ def fetch_live_quotes(symbols: list) -> dict:
             continue   # 이 청크만 스킵 — 나머지 종목은 DB 폴백으로 채워진다
 
     _cache[key] = (now, out)
+    return out
+
+
+def fetch_usd_krw():
+    """USD/KRW 환율. 실패하면 None.
+
+    대시보드의 금액은 전부 원화 기준이다(토스 동기화도 평단을 원화로 환산해 넣는다).
+    달러 시세를 그대로 내려주면 평단과 통화가 뒤섞여 평가손익이 엉터리가 되므로,
+    환율을 못 구하면 해외 시세는 아예 내리지 않는다 — 호출부가 가져오기 스냅샷으로
+    폴백하게 둔다(tools/toss_sync.py 가 --include-us 에서 쓰는 것과 같은 판단).
+    """
+    now = time.monotonic()
+    cached = _fx_cache.get("USDKRW")
+    if cached and now - cached[0] < FX_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    import requests
+
+    rate = None
+    try:
+        res = requests.get(FX_API_URL, params={"from": "USD", "to": "KRW"}, timeout=5)
+        res.raise_for_status()
+        value = (res.json().get("rates") or {}).get("KRW")
+        rate = float(value) if value else None
+    except Exception:
+        rate = None
+
+    if rate:
+        _fx_cache["USDKRW"] = (now, rate)
+    return rate
+
+
+def fetch_world_quotes(symbols: list) -> dict:
+    """해외 티커 -> {"close"(원화), "change_pct", "name", "market_open"}. 실패하면 빈 dict.
+
+    국내와 달리 시간대로 거르지 않는다. 미국 장은 한국 새벽이라 낮에 물으면 늘
+    '장 마감'이지만, 그때 받는 직전 종가도 '토스 동기화 시점에 박제된 값'보다는
+    훨씬 최신이기 때문이다. 지금 장이 열려 있는지는 응답의 marketStatus 로 알려준다.
+
+    close 는 원화로 환산해서 돌려준다(대시보드 합계가 원화 기준). change_pct 는
+    종목 자체의 등락률(달러 기준)이라 환율 변동은 반영되지 않는다.
+    """
+    symbols = [s for s in (symbols or []) if s and not is_krx_code(s)]
+    if not symbols:
+        return {}
+
+    key = ",".join(sorted(symbols))
+    now = time.monotonic()
+    cached = _world_cache.get(key)
+    if cached and now - cached[0] < WORLD_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    rate = fetch_usd_krw()
+    if not rate:
+        return {}          # 환산할 수 없으면 통화가 뒤섞이므로 내리지 않는다
+
+    import requests
+
+    wanted = {s.upper(): s for s in symbols}
+    codes = [c for s in symbols for c in world_candidates(s)]
+
+    out = {}
+    for i in range(0, len(codes), MAX_SYMBOLS_PER_CALL):
+        chunk = codes[i:i + MAX_SYMBOLS_PER_CALL]
+        try:
+            res = requests.get(f"{NAVER_WORLD_URL}/{','.join(chunk)}", timeout=3)
+            res.raise_for_status()
+            for item in res.json().get("datas") or []:
+                symbol = wanted.get(str(item.get("symbolCode") or "").upper())
+                close = _to_float(item.get("closePrice"))
+                if not symbol or close is None or symbol in out:
+                    continue   # 같은 티커가 두 후보로 다 오면 먼저 온 것을 쓴다
+                out[symbol] = {
+                    # 환산 부동소수 꼬리(461091.00000000006)를 잘라 낸다
+                    "close": round(close * rate, 2),
+                    "change_pct": _to_float(item.get("fluctuationsRatio")),
+                    "name": item.get("stockName") or "",
+                    # marketStatus 는 서머타임까지 반영된 네이버의 판단이다. 한국 기준
+                    # 개장 시각이 계절마다 밀리는 문제를 우리가 계산하지 않아도 된다.
+                    "market_open": str(item.get("marketStatus") or "").upper() != "CLOSE",
+                }
+        except Exception:
+            continue
+
+    _world_cache[key] = (now, out)
     return out
