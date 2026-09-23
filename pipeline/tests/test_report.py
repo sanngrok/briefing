@@ -132,3 +132,135 @@ def test_strip_fence_keeps_inner_code_blocks():
     from pipeline import REPORT_HEADING
     body = REPORT_HEADING + "\n\n```\nsentiment_surge_pos\n```\n" + "설명 " * 20
     assert strip_markdown_fence(body) == body.strip()
+
+
+# --- 저장 경로: 재시도와 "저장하지 않음" 보장 --------------------------
+import pytest
+
+import pipeline as P
+
+
+class FakeTable:
+    """signals/sentiment_daily 는 빈 목록, reports 의 upsert 는 기록만 한다."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def select(self, *a):
+        return self
+
+    def eq(self, *a):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": []})()
+
+    def upsert(self, payload, on_conflict=None):
+        self.store.append(payload)
+        return self
+
+
+@pytest.fixture
+def report_env(monkeypatch):
+    """build_report 를 DB·네트워크 없이 돌린다. (저장된 payload, 잠든 시간) 을 돌려준다."""
+    saved, slept = [], []
+    monkeypatch.setattr(P, "get_sb",
+                        lambda: type("SB", (), {"table": staticmethod(lambda t: FakeTable(saved))})())
+    monkeypatch.setattr(P.time, "sleep", lambda s: slept.append(s))
+    return saved, slept
+
+
+class FakeAPIError(Exception):
+    """google-genai APIError 처럼 HTTP 상태를 code 로 들고 있는 예외."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+GOOD = "## 오늘의 뉴스 감정 브리핑\n\n오늘은 감정 급변 시그널이 없습니다. " + "근거 " * 30
+
+
+def _responses(monkeypatch, seq):
+    """_generate_text 가 seq 를 순서대로 돌려주거나 던지게 한다."""
+    calls = []
+
+    def fake(model, prompt, max_tokens, disable_thinking=False):
+        calls.append(disable_thinking)
+        item = seq[len(calls) - 1]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(P, "_generate_text", fake)
+    return calls
+
+
+# --- _is_transient ---------------------------------------------------
+def test_transient_covers_overload_and_ratelimit():
+    # 2026-09-22 실행을 죽인 것이 503 이다
+    assert P._is_transient(FakeAPIError(503, "high demand"))
+    assert P._is_transient(FakeAPIError(429, "rate limit"))
+    assert P._is_transient(FakeAPIError(500, "internal"))
+
+
+def test_transient_excludes_client_errors_and_our_own():
+    assert not P._is_transient(FakeAPIError(400, "bad request"))
+    assert not P._is_transient(FakeAPIError(404, "not found"))
+    # 잘림·빈 응답은 다시 불러도 같은 문제라 재시도 대상이 아니다(code 가 없다)
+    assert not P._is_transient(RuntimeError("출력이 max_output_tokens=6000 에서 잘림"))
+
+
+# --- 재시도 ------------------------------------------------------------
+def test_report_retries_transient_error_then_saves(report_env, monkeypatch):
+    saved, slept = report_env
+    _responses(monkeypatch, [FakeAPIError(503, "high demand"), GOOD])
+    P.build_report([])
+    assert len(saved) == 1
+    assert saved[0]["body_md"].startswith("## 오늘의 뉴스 감정 브리핑")
+    assert slept == [P.REPORT_RETRY_SECONDS]        # 첫 재시도는 기준 대기
+
+
+def test_report_backoff_is_exponential(report_env, monkeypatch):
+    saved, slept = report_env
+    _responses(monkeypatch, [FakeAPIError(503, "x"), FakeAPIError(503, "x"), GOOD])
+    P.build_report([])
+    assert slept == [P.REPORT_RETRY_SECONDS, P.REPORT_RETRY_SECONDS * 2]
+
+
+def test_report_gives_up_after_all_attempts_without_saving(report_env, monkeypatch):
+    saved, slept = report_env
+    _responses(monkeypatch, [FakeAPIError(503, "x")] * P.REPORT_ATTEMPTS)
+    with pytest.raises(FakeAPIError):
+        P.build_report([])
+    assert saved == []                              # 전날 리포트를 덮어쓰지 않는다
+
+
+def test_report_does_not_retry_non_transient(report_env, monkeypatch):
+    saved, slept = report_env
+    calls = _responses(monkeypatch, [FakeAPIError(400, "bad request"), GOOD])
+    with pytest.raises(FakeAPIError):
+        P.build_report([])
+    assert len(calls) == 1 and slept == [] and saved == []
+
+
+# --- 형태 불량 재시도 --------------------------------------------------
+def test_report_retries_malformed_output_then_saves(report_env, monkeypatch):
+    saved, _ = report_env
+    calls = _responses(monkeypatch, ["  Let's double check the rules.", GOOD])
+    P.build_report([])
+    assert len(calls) == 2 and len(saved) == 1
+
+
+def test_report_never_saves_malformed_output(report_env, monkeypatch):
+    saved, _ = report_env
+    _responses(monkeypatch, ["  Let's double check the rules."] * P.REPORT_ATTEMPTS)
+    with pytest.raises(RuntimeError, match="리포트 형태"):
+        P.build_report([])
+    assert saved == []
+
+
+def test_report_always_disables_thinking(report_env, monkeypatch):
+    calls = _responses(monkeypatch, [GOOD])
+    P.build_report([])
+    assert calls == [True]

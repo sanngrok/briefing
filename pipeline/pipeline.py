@@ -40,7 +40,8 @@ PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 �
 CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
 REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
 SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
-REPORT_ATTEMPTS = 2     # 리포트 형태가 아닌 응답을 받았을 때 재시도 포함 총 호출 횟수
+REPORT_ATTEMPTS = 4     # 리포트 생성 총 시도 횟수(형태 불량·일시적 오류 공통)
+REPORT_RETRY_SECONDS = 10   # 일시적 오류 재시도 대기. 지수 백오프(10 -> 20 -> 40초)
 
 TODAY = date.today()
 
@@ -74,6 +75,24 @@ def _finish_reason(resp):
     if fr is None:
         return None
     return getattr(fr, "name", None) or str(fr)
+
+
+# 잠시 뒤 다시 하면 될 법한 HTTP 상태. 429=레이트리밋, 503=모델 과부하.
+TRANSIENT_STATUS = {429, 500, 503, 504}
+
+
+def _is_transient(err) -> bool:
+    """재시도할 가치가 있는 일시적 오류인지.
+
+    2026-09-22 실행이 `503 UNAVAILABLE: This model is currently experiencing high
+    demand` 로 죽어 그날 리포트가 통째로 없었다. 시세·뉴스·감정·시그널은 이미
+    적재된 뒤였는데 마지막 한 번의 호출 때문에 잡이 실패했다.
+
+    google-genai 의 APIError 는 HTTP 상태를 `code` 로 들고 있다. 우리가 직접 올린
+    RuntimeError(잘림·빈 응답)에는 code 가 없으므로 자연히 제외된다 — 그건 다시
+    불러도 같은 이유로 실패할 종류의 오류가 아니라, 응답 내용의 문제다.
+    """
+    return getattr(err, "code", None) in TRANSIENT_STATUS
 
 
 def _thinking_rejected(err) -> bool:
@@ -471,14 +490,25 @@ def build_report(tickers):
     payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
     prompt = build_report_prompt(payload)
 
-    # 생각을 끈 상태로 뽑고, 그래도 리포트 형태가 아니면 한 번 더 시도한다.
-    # 두 번 다 실패하면 저장하지 않고 예외로 올린다 — 쓸 수 없는 본문으로 전날
-    # 리포트를 덮어쓰는 것보다, 잡이 실패해서 눈에 띄는 쪽이 낫다.
+    # 생각을 끈 상태로 뽑는다. 두 가지 이유로 다시 시도할 수 있다.
+    #  - 일시적 오류(503 과부하·429 레이트리밋): 지수 백오프 후 재시도.
+    #  - 리포트 형태가 아닌 응답: 바로 재시도(같은 프롬프트, 확률적 현상이므로).
+    # 모두 소진하면 저장하지 않고 예외로 올린다 — 쓸 수 없는 본문으로 전날 리포트를
+    # 덮어쓰는 것보다, 잡이 실패해서 눈에 띄는 쪽이 낫다.
     text = None
     for attempt in range(1, REPORT_ATTEMPTS + 1):
-        candidate = strip_markdown_fence(
-            _generate_text(REPORT_MODEL, prompt, max_tokens=6000,
-                           disable_thinking=True))
+        try:
+            candidate = strip_markdown_fence(
+                _generate_text(REPORT_MODEL, prompt, max_tokens=6000,
+                               disable_thinking=True))
+        except Exception as e:
+            if not _is_transient(e) or attempt == REPORT_ATTEMPTS:
+                raise
+            wait = REPORT_RETRY_SECONDS * (2 ** (attempt - 1))
+            print(f"[report] 일시적 오류({getattr(e, 'code', '?')}), {wait}초 뒤 "
+                  f"재시도 ({attempt}/{REPORT_ATTEMPTS}): {e}")
+            time.sleep(wait)
+            continue
         if is_valid_report(candidate):
             text = candidate
             break
