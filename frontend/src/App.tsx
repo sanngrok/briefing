@@ -11,6 +11,13 @@ import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
 import type { Holding } from './lib/portfolio'
+import { isMarketLiveWindow } from './lib/market'
+
+// 장중엔 15초마다 새로 부른다(서버가 네이버 실시간 값을 덮어써 주므로).
+const QUOTE_POLL_MS = 15000
+// 장 시간 밖이거나 탭이 가려져 있으면 요청을 보내지 않고, 이 간격으로 조건만 다시 본다.
+// 네트워크 호출이 아니라 조건 확인이라 서버에는 아무것도 가지 않는다.
+const QUOTE_IDLE_RECHECK_MS = 60000
 
 export default function App() {
   const [tickers, setTickers] = useState<Ticker[]>([])
@@ -50,10 +57,15 @@ export default function App() {
   }, [])
 
   // 포트폴리오 평가용 종가(워치리스트 전체를 한 번에). 장중엔 서버가 네이버
-  // 실시간 값을 덮어써 주므로, 여기서 주기적으로 다시 불러오면 "준실시간"이 된다
-  // — 장 마감 후에는 서버가 같은 DB 값을 그대로 돌려주니 폴링해도 무해하다.
+  // 실시간 값을 덮어써 주므로, 여기서 주기적으로 다시 불러오면 "준실시간"이 된다.
+  //
+  // 다만 장 시간 밖이나 탭이 가려져 있을 때는 부르지 않는다. 그때는 서버가 같은 DB
+  // 값을 돌려줄 뿐이라 값이 변하지 않는데, 요청이 계속 가면 무료 인스턴스가 잠들지
+  // 못해 쿼터만 쓴다(탭 하나를 하루 종일 열어두면 한 달치를 거의 다 쓴다).
   useEffect(() => {
     let cancelled = false
+    let timer: number | undefined
+
     function loadQuotes() {
       api
         .quotes()
@@ -67,11 +79,33 @@ export default function App() {
           if (!cancelled) setQuotes([])
         })
     }
-    loadQuotes()
-    const id = window.setInterval(loadQuotes, 15000)
+
+    function shouldPoll() {
+      return !document.hidden && isMarketLiveWindow()
+    }
+
+    function schedule() {
+      timer = window.setTimeout(tick, shouldPoll() ? QUOTE_POLL_MS : QUOTE_IDLE_RECHECK_MS)
+    }
+
+    function tick() {
+      if (cancelled) return
+      if (shouldPoll()) loadQuotes()
+      schedule()
+    }
+
+    // 탭으로 돌아왔을 때 다음 틱까지 기다리지 않고 바로 최신화한다.
+    function onVisibilityChange() {
+      if (shouldPoll()) loadQuotes()
+    }
+
+    loadQuotes() // 최초 1회는 장 시간 밖이어도 부른다(전일 종가를 보여줘야 하므로)
+    schedule()
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       cancelled = true
-      window.clearInterval(id)
+      if (timer !== undefined) window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, [])
 
