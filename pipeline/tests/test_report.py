@@ -264,3 +264,37 @@ def test_report_always_disables_thinking(report_env, monkeypatch):
     calls = _responses(monkeypatch, [GOOD])
     P.build_report([])
     assert calls == [True]
+
+
+# --- 부동소수 꼬리 정리 ------------------------------------------------
+def test_payload_rounds_float_tails():
+    """집계값의 0.5750000000000001 같은 꼬리가 본문에 그대로 옮겨 적히던 문제."""
+    rows = [{"ticker_id": 1, "avg_sentiment": -0.5750000000000001,
+             "baseline": 0.4160714285714286, "news_count": 8}]
+    p = build_report_payload([], rows, NAME_OF, "2026-09-22")
+    assert p["sentiment"][0]["avg"] == -0.575
+    assert p["sentiment"][0]["baseline"] == 0.416
+
+
+def test_payload_flattens_negative_zero():
+    """-2.7755575615628914e-17 이 -0.0 으로 남지 않게 한다."""
+    rows = [{"ticker_id": 1, "avg_sentiment": -2.7755575615628914e-17,
+             "baseline": 0.0, "news_count": 1}]
+    p = build_report_payload([], rows, NAME_OF, "2026-09-22")
+    assert p["sentiment"][0]["avg"] == 0.0
+    assert str(p["sentiment"][0]["avg"]) == "0.0"
+
+
+def test_payload_rounds_inside_evidence():
+    p = build_report_payload(
+        [{"ticker_id": 1, "type": "x", "severity": "high",
+          "evidence": {"delta": 0.6269999999999999, "news_ids": [1, 2]}}],
+        [], NAME_OF, "2026-09-22")
+    assert p["signals"][0]["delta"] == 0.627
+    assert p["signals"][0]["news_ids"] == [1, 2]      # 정수 목록은 그대로
+
+
+def test_round_numbers_leaves_non_numbers_alone():
+    from pipeline import round_numbers
+    assert round_numbers({"a": "문자열", "b": 3, "c": None, "d": True}) == {
+        "a": "문자열", "b": 3, "c": None, "d": True}

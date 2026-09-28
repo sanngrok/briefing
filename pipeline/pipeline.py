@@ -41,6 +41,8 @@ CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
 REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
 SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
 REPORT_ATTEMPTS = 4     # 리포트 생성 총 시도 횟수(형태 불량·일시적 오류 공통)
+SENTIMENT_ATTEMPTS = 2      # 감정 분석 총 시도 횟수. 기사 수만큼 도는 경로라 짧게 잡는다
+SENTIMENT_RETRY_SECONDS = 5 # 감정 분석 재시도 대기
 REPORT_RETRY_SECONDS = 10   # 일시적 오류 재시도 대기. 지수 백오프(10 -> 20 -> 40초)
 
 TODAY = date.today()
@@ -300,12 +302,26 @@ def enrich_news(items):
             '형식: {"sentiment": -1.0~1.0, "tags": ["..."], "summary": "한 줄 한국어 요약"}\n'
             f'제목: {it["title"]}\n요약: {it["_desc"]}'
         )
-        try:
-            # thinking 토큰이 한도를 나눠 쓰므로 짧은 JSON 이어도 여유를 둔다
-            text = _generate_text(CHEAP_MODEL, prompt, max_tokens=1000)
-            data = parse_sentiment(text)
-        except Exception as e:
-            print(f"[sentiment] 실패, 중립 처리: {e}")
+        # 503(모델 과부하)은 이 경로에도 실제로 들어온다. 실패를 중립 0.0 으로
+        # 떨어뜨리면 그날 평균이 0 쪽으로 끌려가고, 그게 기준선과 시그널까지
+        # 오염시킨다. 그래서 일시적 오류만 한 번 더 시도한다 — 기사 수만큼 도는
+        # 경로라 횟수는 짧게 잡았다(SDK 자체 재시도도 이미 있다).
+        data = None
+        for attempt in range(1, SENTIMENT_ATTEMPTS + 1):
+            try:
+                # thinking 토큰이 한도를 나눠 쓰므로 짧은 JSON 이어도 여유를 둔다
+                text = _generate_text(CHEAP_MODEL, prompt, max_tokens=1000)
+                data = parse_sentiment(text)
+                break
+            except Exception as e:
+                if _is_transient(e) and attempt < SENTIMENT_ATTEMPTS:
+                    print(f"[sentiment] 일시적 오류({getattr(e, 'code', '?')}), "
+                          f"{SENTIMENT_RETRY_SECONDS}초 뒤 재시도")
+                    time.sleep(SENTIMENT_RETRY_SECONDS)
+                    continue
+                print(f"[sentiment] 실패, 중립 처리: {e}")
+                break
+        if data is None:
             data = {"sentiment": 0.0, "tags": [], "summary": it["title"]}
 
         enriched.append({
@@ -443,6 +459,26 @@ def is_valid_report(text) -> bool:
     return body.startswith("#") and len(body) >= MIN_REPORT_CHARS
 
 
+def round_numbers(value, ndigits: int = 3):
+    """payload 안의 실수를 반올림. (순수 함수)
+
+    집계값이 0.5750000000000001 이나 -2.7755575615628914e-17 같은 부동소수 꼬리를
+    달고 있어서, 모델이 그걸 그대로 리포트 본문에 옮겨 적었다. 근거로 쓰는 숫자라
+    정밀도를 크게 줄이지는 않고(시그널 임계치가 소수 둘째 자리), 읽는 데 방해가
+    되는 꼬리만 자른다. -0.0 은 0.0 으로 눕힌다.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        rounded = round(value, ndigits)
+        return 0.0 if rounded == 0 else rounded
+    if isinstance(value, dict):
+        return {k: round_numbers(v, ndigits) for k, v in value.items()}
+    if isinstance(value, list):
+        return [round_numbers(v, ndigits) for v in value]
+    return value
+
+
 def build_report_payload(signals_rows, daily_rows, name_of, report_date):
     """리포트 LLM 에 넘길 근거 payload. 조회된 실제 행만으로 구성한다(그라운딩). (순수 함수)
 
@@ -450,7 +486,7 @@ def build_report_payload(signals_rows, daily_rows, name_of, report_date):
     - sentiment: 종목별 일집계.
     - 데이터에 없는 값은 만들지 않는다.
     """
-    return {
+    return round_numbers({
         "date": report_date,
         "signals": [
             {"name": name_of.get(s["ticker_id"]), "type": s["type"],
@@ -462,7 +498,7 @@ def build_report_payload(signals_rows, daily_rows, name_of, report_date):
              "baseline": d["baseline"], "news_count": d["news_count"]}
             for d in (daily_rows or [])
         ],
-    }
+    })
 
 
 def build_report_prompt(payload):

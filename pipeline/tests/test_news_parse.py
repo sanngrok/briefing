@@ -86,3 +86,4 @@ def test_parse_sentiment_defaults_when_missing_keys():
 def test_parse_sentiment_invalid_raises():
     with pytest.raises(Exception):
         parse_sentiment("이건 JSON 이 아님")
+

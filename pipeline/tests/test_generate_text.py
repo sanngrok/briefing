@@ -108,3 +108,68 @@ def test_other_errors_are_not_retried(fake_ai):
     with pytest.raises(RuntimeError, match="RESOURCE_EXHAUSTED"):
         pipeline._generate_text("m", "p", max_tokens=100, disable_thinking=True)
     assert models.calls == [True]            # 재시도 없음(레이트리밋은 폴백 대상 아님)
+
+
+# --- 감정 분석 경로: 일시적 오류 재시도 (503 이 중립 0.0 으로 새지 않게) ----
+class FakeAPIError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def _enrich_env(monkeypatch):
+    """enrich_news 를 DB·네트워크 없이 돌린다. (upsert된 행, 잠든 시간)."""
+    saved, slept = [], []
+
+    class T:
+        def upsert(self, rows, on_conflict=None):
+            saved.extend(rows); return self
+        def execute(self): return type("R", (), {"data": []})()
+
+    monkeypatch.setattr(pipeline, "get_sb",
+                        lambda: type("SB", (), {"table": staticmethod(lambda n: T())})())
+    monkeypatch.setattr(pipeline.time, "sleep", lambda s: slept.append(s))
+    return saved, slept
+
+
+ITEM = {"ticker_id": 1, "url_hash": "h", "title": "제목", "url": "u",
+        "source": "naver", "published_at": "2026-09-24T00:00:00+09:00", "_desc": "요약"}
+GOOD_JSON = '{"sentiment": 0.35, "tags": ["실적"], "summary": "한 줄"}'
+
+
+def test_sentiment_retries_transient_then_succeeds(monkeypatch):
+    saved, slept = _enrich_env(monkeypatch)
+    calls = []
+
+    def fake(model, prompt, max_tokens, disable_thinking=False):
+        calls.append(1)
+        if len(calls) == 1:
+            raise FakeAPIError(503, "high demand")
+        return GOOD_JSON
+
+    monkeypatch.setattr(pipeline, "_generate_text", fake)
+    pipeline.enrich_news([dict(ITEM)])
+    assert saved[0]["sentiment"] == 0.35          # 중립으로 떨어지지 않았다
+    assert pipeline.SENTIMENT_RETRY_SECONDS in slept
+
+
+def test_sentiment_falls_back_to_neutral_after_attempts(monkeypatch):
+    saved, _ = _enrich_env(monkeypatch)
+    monkeypatch.setattr(pipeline, "_generate_text",
+                        lambda *a, **k: (_ for _ in ()).throw(FakeAPIError(503, "x")))
+    pipeline.enrich_news([dict(ITEM)])
+    assert saved[0]["sentiment"] == 0.0           # 다 실패하면 기존대로 중립
+    assert saved[0]["summary"] == "제목"
+
+
+def test_sentiment_does_not_retry_non_transient(monkeypatch):
+    saved, slept = _enrich_env(monkeypatch)
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        raise ValueError("파싱 불가")
+
+    monkeypatch.setattr(pipeline, "_generate_text", fake)
+    pipeline.enrich_news([dict(ITEM)])
+    assert len(calls) == 1 and pipeline.SENTIMENT_RETRY_SECONDS not in slept
