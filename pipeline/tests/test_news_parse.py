@@ -7,7 +7,8 @@ test_news_parse.py — 뉴스/감정 파싱 단위 테스트 (M3, 키·네트워
 
 import pytest
 
-from pipeline import parse_news_item, parse_sentiment, _hash
+from pipeline import (build_sentiment_prompt, parse_news_item, parse_sentiment,
+                      SENTIMENT_SCALE, _hash)
 
 
 # 네이버 뉴스 검색 API 응답 item 샘플 (실제 형태: HTML 태그·엔티티 포함)
@@ -87,3 +88,36 @@ def test_parse_sentiment_invalid_raises():
     with pytest.raises(Exception):
         parse_sentiment("이건 JSON 이 아님")
 
+
+# --- 감정 프롬프트 기준표 (눈금이 몇 개 값으로 몰리던 문제) ----------------
+def test_prompt_embeds_title_and_description():
+    prompt = build_sentiment_prompt("삼성전자 깜짝 실적", "반도체 업황 회복")
+    assert "삼성전자 깜짝 실적" in prompt
+    assert "반도체 업황 회복" in prompt
+
+
+def test_prompt_carries_the_scale():
+    """기준표가 빠지면 모델이 0.8/0.5 로 몰린다 — 이 변경의 핵심이라 고정한다."""
+    prompt = build_sentiment_prompt("t", "d")
+    assert SENTIMENT_SCALE in prompt
+    assert "0.05 단위" in prompt
+    assert "몇 개 값으로 몰지 마라" in prompt
+
+
+def test_scale_anchors_span_both_directions():
+    """양 끝과 중간이 모두 정의돼 있어야 모델이 중간값을 쓸 근거가 생긴다."""
+    for anchor in ("+0.9~1.0", "+0.6~0.8", "+0.3~0.5", "0.0",
+                   "-0.3~-0.5", "-0.6~-0.8", "-0.9~-1.0"):
+        assert anchor in SENTIMENT_SCALE, anchor
+
+
+def test_prompt_still_demands_json_only():
+    """응답 파서(parse_sentiment)가 JSON 을 기대하므로 이 지시는 유지돼야 한다."""
+    prompt = build_sentiment_prompt("t", "d")
+    assert "JSON 만 출력하라" in prompt
+    assert '"sentiment"' in prompt and '"tags"' in prompt and '"summary"' in prompt
+
+
+def test_prompt_handles_empty_description():
+    prompt = build_sentiment_prompt("제목만 있는 기사", "")
+    assert "제목만 있는 기사" in prompt
