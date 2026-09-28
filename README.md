@@ -279,6 +279,13 @@ python tools/toss_sync.py --dump-raw   # 토스가 주는 원본 필드 확인 (
 
 - **평일 16:30** 에 `toss_sync.py --include-us` 가 돕니다(장 마감 15:30 뒤 체결 정리 시간을 둠).
 - 로그: `tools/logs/tosssync.log` (보유 종목이 남으므로 `.gitignore` 대상입니다).
+- **실패하면 macOS 알림**이 뜹니다(`--notify-on-error`). 자동 실행은 조용히 실패하는 게
+  가장 나쁩니다 — 특히 이 API 는 **등록한 IP 에서만** 호출을 받는데 가정용 공인 IP 는
+  수시로 바뀝니다(실측: 같은 날 4시간 만에 바뀌어 403). 알림이 뜨면 토스 앱 → Open API
+  에서 현재 IP 를 다시 등록하세요.
+- 플리스트가 **셸을 거치지 않고 파이썬을 직접** 실행하는 이유: macOS 는 `~/Documents` 를
+  보호 폴더로 다뤄서, launchd 가 `/bin/bash` 로 그 안의 스크립트를 열면
+  `Operation not permitted`(종료 코드 126)로 막힙니다.
 - 지금 한 번 돌려보기: `launchctl kickstart -k gui/$(id -u)/com.briefing.tosssync`
 - 등록 확인: `launchctl list | grep briefing`
 

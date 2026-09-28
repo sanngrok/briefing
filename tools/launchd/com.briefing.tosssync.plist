@@ -14,11 +14,15 @@
   <key>Label</key>
   <string>com.briefing.tosssync</string>
 
+  <!-- 파이썬을 직접 실행한다. 셸 스크립트를 거치면 macOS 가 ~/Documents 접근을
+       막는다 — /bin/bash 로는 보호 폴더를 열 수 없어 "Operation not permitted"
+       가 난다. 실패 알림은 --notify-on-error 로 스크립트 안에서 띄운다. -->
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
     <string>__REPO__/tools/toss_sync.py</string>
     <string>--include-us</string>
+    <string>--notify-on-error</string>
   </array>
 
   <!-- toss_sync.py 가 .env 를 상대경로로 읽으므로 반드시 필요하다 -->

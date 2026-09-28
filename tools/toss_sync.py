@@ -263,6 +263,11 @@ def main(argv=None) -> int:
              "— 환율을 못 구하면 이번에도 국내 종목만 저장합니다",
     )
     parser.add_argument(
+        "--notify-on-error", action="store_true",
+        help="실패하면 macOS 알림을 띄웁니다(launchd 자동 실행용). "
+             "자동 실행은 조용히 실패하는 게 가장 나쁘기 때문입니다",
+    )
+    parser.add_argument(
         "--dump-raw", metavar="PATH", nargs="?", const="-",
         help="보유 종목 원본 응답을 그대로 출력/저장합니다(필드 확인용). "
              "종목·수량이 그대로 들어 있으니 공유에 주의하세요",
@@ -332,5 +337,38 @@ def main(argv=None) -> int:
     return 0
 
 
+def notify_failure(message: str) -> None:
+    """macOS 알림으로 실패를 알린다. 알림 자체가 실패해도 무시한다.
+
+    자동 실행(launchd)은 조용히 실패하는 게 가장 나쁘다. 특히 이 API 는 신청 때
+    등록한 IP 에서만 호출을 받는데 가정용 공인 IP 는 수시로 바뀐다(실측: 같은 날
+    4시간 만에 바뀌어 403). 로그에만 남으면 며칠 지난 보유 정보를 최신인 줄 알고 본다.
+    """
+    import subprocess
+
+    if "IP address not allowed" in message:
+        body = "등록된 IP 가 아닙니다. 토스 앱 → Open API 에서 현재 IP 를 다시 등록하세요."
+    elif "호출 한도" in message:
+        body = "API 호출 한도를 초과했습니다. 잠시 후 다시 시도하세요."
+    else:
+        body = message.splitlines()[0][:120] if message else "동기화에 실패했습니다."
+    body = body.replace('"', "'")
+    try:
+        subprocess.run(
+            ["/usr/bin/osascript", "-e",
+             f'display notification "{body}" with title "토스 동기화 실패"'],
+            timeout=10, check=False,
+        )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit as exc:
+        # _check() 는 사람이 읽을 메시지를 담아 SystemExit 를 올린다.
+        failed = isinstance(exc.code, str) or (isinstance(exc.code, int) and exc.code != 0)
+        if failed and "--notify-on-error" in sys.argv:
+            notify_failure(exc.code if isinstance(exc.code, str) else "동기화에 실패했습니다.")
+        raise
