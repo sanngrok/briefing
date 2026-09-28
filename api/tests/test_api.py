@@ -547,3 +547,60 @@ def test_quotes_omits_fx_for_domestic_only(monkeypatch):
 
 def test_quotes_explicit_date_omits_fx(monkeypatch):
     assert client.get("/api/quotes?date=2026-07-24&symbols=AAPL").json()["fx_usdkrw"] is None
+
+
+# ---- 뉴스 방향 필터 (악재 목록이 비다시피 하던 문제) ----
+def test_news_direction_bad_returns_only_negative():
+    rows = client.get("/api/news?direction=bad&limit=10").json()
+    assert rows, "FakeRepo 에 부정 기사가 있어야 한다"
+    assert all(r["sentiment"] <= -0.15 for r in rows)
+
+
+def test_news_direction_good_returns_only_positive():
+    rows = client.get("/api/news?direction=good&limit=10").json()
+    assert all(r["sentiment"] >= 0.15 for r in rows)
+
+
+def test_news_direction_defaults_to_all():
+    both = client.get("/api/news?limit=10").json()
+    good = client.get("/api/news?direction=good&limit=10").json()
+    bad = client.get("/api/news?direction=bad&limit=10").json()
+    assert len(both) >= max(len(good), len(bad))
+
+
+def test_news_rejects_unknown_direction():
+    assert client.get("/api/news?direction=sideways").status_code == 422
+
+
+def test_rank_news_direction_picks_strongest_within_side():
+    """전체를 줄 세우면 수가 많은 쪽이 상위를 쓸어간다 — 방향을 먼저 거른다."""
+    rows = [
+        {"title": f"p{i}", "url": f"u{i}", "source": "s", "published_at": "2026-09-25",
+         "sentiment": 0.9, "issue_tags": [], "summary": "",
+         "tickers": {"symbol": "005930", "name": "삼성"}}
+        for i in range(20)
+    ] + [
+        {"title": "n1", "url": "un1", "source": "s", "published_at": "2026-09-25",
+         "sentiment": -0.2, "issue_tags": [], "summary": "",
+         "tickers": {"symbol": "005930", "name": "삼성"}},
+        {"title": "n2", "url": "un2", "source": "s", "published_at": "2026-09-25",
+         "sentiment": -0.8, "issue_tags": [], "summary": "",
+         "tickers": {"symbol": "005930", "name": "삼성"}},
+    ]
+    # 전체 상위 5 에는 부정이 하나도 못 들어온다
+    assert all(x["sentiment"] > 0 for x in rank_news(rows, 5))
+    # 방향을 주면 부정만, 강한 순으로
+    bad = rank_news(rows, 5, "bad")
+    assert [x["title"] for x in bad] == ["n2", "n1"]
+
+
+def test_rank_news_direction_respects_neutral_boundary():
+    """±0.15 미만은 어느 쪽에도 들어가지 않는다(프론트 tone() 과 같은 경계)."""
+    rows = [
+        {"title": "flat", "url": "u", "source": "s", "published_at": "2026-09-25",
+         "sentiment": 0.1, "issue_tags": [], "summary": "",
+         "tickers": {"symbol": "005930", "name": "삼성"}},
+    ]
+    assert rank_news(rows, 5, "good") == []
+    assert rank_news(rows, 5, "bad") == []
+    assert len(rank_news(rows, 5)) == 1

@@ -70,14 +70,28 @@ def to_news_item(row: dict) -> dict:
     }
 
 
-def rank_news(rows: list, limit: int) -> list:
+# 호재/악재를 가르는 경계. 프론트의 tone() 이 쓰는 값과 같아야 한다
+# (같은 기사가 목록에서는 '중립' 인데 악재 탭에 들어가 있으면 안 되므로).
+NEWS_DIRECTION_THRESHOLD = 0.15
+
+
+def rank_news(rows: list, limit: int, direction: str = "all") -> list:
     """감정 강도(|sentiment|)가 큰 순으로 상위 limit건. (순수 함수)
 
     '주요 뉴스' = 긍정이든 부정이든 감정이 강하게 잡힌 기사.
     sentiment 가 없는 기사는 0으로 취급해 뒤로 밀린다.
     파이썬 정렬은 안정적이므로 동점이면 입력 순서(발행 최신순)가 유지된다.
+
+    direction 으로 한쪽만 추릴 수 있다. 전체를 |sentiment| 순으로 줄 세운 뒤
+    자르면 수가 많은 쪽이 상위를 쓸어가기 때문이다 — 실측에서 풀 400건 중 악재가
+    61건인데도 상위 50 에는 9건밖에 들어오지 못했다. 방향을 먼저 거르고 그 안에서
+    강한 순으로 뽑아야 악재 목록이 제 구실을 한다.
     """
     items = [to_news_item(r) for r in rows or []]
+    if direction == "good":
+        items = [x for x in items if (x["sentiment"] or 0.0) >= NEWS_DIRECTION_THRESHOLD]
+    elif direction == "bad":
+        items = [x for x in items if (x["sentiment"] or 0.0) <= -NEWS_DIRECTION_THRESHOLD]
     items.sort(key=lambda x: abs(x["sentiment"] or 0.0), reverse=True)
     return items[:limit]
 
