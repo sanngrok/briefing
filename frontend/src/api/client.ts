@@ -104,11 +104,18 @@ export const api = {
     return get<Movers>(`/api/movers${qs ? `?${qs}` : ''}`)
   },
 
-  news: (params?: { symbol?: string; date?: string; limit?: number }) => {
+  news: (params?: {
+    symbol?: string
+    date?: string
+    limit?: number
+    /** 호재/악재만 추리기. 서버가 그 방향 안에서 강한 순으로 뽑아 준다. */
+    direction?: 'all' | 'good' | 'bad'
+  }) => {
     const q = new URLSearchParams()
     if (params?.symbol) q.set('symbol', params.symbol)
     if (params?.date) q.set('date', params.date)
     if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.direction && params.direction !== 'all') q.set('direction', params.direction)
     const qs = q.toString()
     return get<NewsItem[]>(`/api/news${qs ? `?${qs}` : ''}`)
   },

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api/client'
-import type { Movers, NewsItem, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
+import type { Movers, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
 import { MoversPanel } from './components/MoversPanel'
 import { NewsList, NEWS_SHOWN } from './components/NewsList'
+import type { NewsLists } from './components/NewsList'
 import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
@@ -22,7 +23,9 @@ export default function App() {
   const [tickers, setTickers] = useState<Ticker[]>([])
   const [report, setReport] = useState<Report | null>(null)
   const [signals, setSignals] = useState<Signal[]>([])
-  const [news, setNews] = useState<NewsItem[]>([])
+  // 방향별로 따로 받는다. 전체를 |감정| 순으로 줄 세운 뒤 자르면 수가 많은 쪽
+  // (대개 호재)이 상위를 쓸어가서 악재 탭이 비다시피 하기 때문이다.
+  const [news, setNews] = useState<NewsLists>({ all: [], good: [], bad: [] })
   const [movers, setMovers] = useState<Movers | null>(null)
   const [metrics, setMetrics] = useState<TickerMetrics | null>(null)
   const [symbol, setSymbol] = useState('')
@@ -68,7 +71,13 @@ export default function App() {
       .catch(() => setTickers([]))
     api.latestReport().then(setReport).catch(() => setReport(null))
     api.signals().then(setSignals).catch(() => setSignals([]))
-    api.news({ limit: 50 }).then(setNews).catch(() => setNews([]))
+    Promise.all([
+      api.news({ limit: NEWS_SHOWN }),
+      api.news({ limit: NEWS_SHOWN, direction: 'good' }),
+      api.news({ limit: NEWS_SHOWN, direction: 'bad' }),
+    ])
+      .then(([all, good, bad]) => setNews({ all, good, bad }))
+      .catch(() => setNews({ all: [], good: [], bad: [] }))
     api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
   }, [])
 
@@ -159,7 +168,7 @@ export default function App() {
           {report && <span className="date-pill mono">{report.date}</span>}
         </div>
         <p className="subtitle">국내 주식 뉴스 감정을 매일 분석해 급변 시그널을 찾습니다.</p>
-        <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={Math.min(news.length, NEWS_SHOWN)} />
+        <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.all.length} />
       </header>
 
       <section className="section">
@@ -207,7 +216,7 @@ export default function App() {
           <span className="subsection-hint">감정 강도가 큰 순</span>
         </h3>
         <div className="panel panel-flush">
-          <NewsList items={news} />
+          <NewsList lists={news} />
         </div>
       </section>
 
