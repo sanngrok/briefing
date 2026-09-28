@@ -760,28 +760,19 @@ a {
 
 /* 감정 점수 칩 */
 .news-score {
-  flex: 0 0 62px;
+  flex: 0 0 56px;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  border-radius: var(--radius-sm);
-  padding: 6px 4px;
+  border-radius: 999px;
+  padding: 5px 8px;
   height: fit-content;
-}
-
-.news-score-num {
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: 700;
   letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
-.news-score-label {
-  font-size: 10.5px;
-  font-weight: 500;
-  opacity: 0.85;
-}
 
 .news-score.good-strong {
   background: var(--good);

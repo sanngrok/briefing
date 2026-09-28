@@ -2,6 +2,10 @@ import type { NewsItem } from '../api/client'
 
 // 감정 점수 → 표시용 등급. 색과 라벨을 여기서 한 번에 결정한다.
 // 색은 국내 관행을 따른다 — 호재(주가를 올릴 재료)는 빨강, 악재는 파랑.
+//
+// 점수 자체는 화면에 내보이지 않는다. 모델이 매기는 값이 사실상 몇 개로 몰려 있어
+// (실측에서 0.8 이 최빈값) 소수 둘째 자리까지 보여주면 있지도 않은 정밀도를
+// 주장하게 된다. 뒤쪽 시그널 판정은 여전히 점수로 돌아간다.
 function tone(sentiment?: number | null) {
   const s = sentiment ?? 0
   if (s >= 0.5) return { cls: 'good-strong', label: '호재' }
@@ -32,15 +36,9 @@ export function NewsList({ items }: { items: NewsItem[] }) {
     <ul className="newslist">
       {items.map((n, i) => {
         const t = tone(n.sentiment)
-        const score = n.sentiment ?? null
         return (
           <li key={`${n.url ?? n.title}-${i}`} className="newsrow">
-            <div className={`news-score ${t.cls}`}>
-              <span className="news-score-num mono">
-                {score === null ? '—' : (score > 0 ? '+' : '') + score.toFixed(2)}
-              </span>
-              <span className="news-score-label">{t.label}</span>
-            </div>
+            <div className={`news-score ${t.cls}`}>{t.label}</div>
 
             <div className="news-body">
               <div className="news-title">
