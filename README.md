@@ -144,6 +144,7 @@ FastAPI. Supabase 를 **읽기만** 하며 CORS 는 프론트 도메인만, GET 
 | GET | `/api/reports/{date}` | 특정일 리포트 |
 | GET | `/api/tickers/{symbol}/metrics?from=&to=` | 종목 시세·감정 시계열 |
 | GET | `/api/signals?date=&severity=` | 시그널 목록(필터) |
+| GET | `/api/news?limit=&direction=&symbol=&date=` | 주요 뉴스(감정 강도 순). `direction=good/bad` 로 한쪽만 추리면 **그 방향 안에서** 강한 순으로 뽑는다 |
 | GET | `/api/quotes?symbols=&date=` | 최근 영업일 종가·등락률(포트폴리오 평가용). `date` 미지정 + 평일 09:00~18:00 KST 면 네이버 금융 실시간(비공식) 값으로 덮어쓰고, DB 시세가 없는 국내 종목도 채운다. 해외 종목은 시간대와 무관하게 네이버 해외 시세로 원화 환산해 채운다. `live: true` 는 실제로 장이 열려 있을 때만 |
 
 **로컬 실행 / 테스트**
