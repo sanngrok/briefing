@@ -34,7 +34,13 @@ from datetime import date, datetime, timedelta
 # ---- 튜닝 파라미터 -----------------------------------------------------
 BASELINE_DAYS = 5        # 감정 기준선 계산에 쓸 직전 일수
 MIN_NEWS      = 3        # 시그널 발화 최소 기사 수
-THRESHOLD     = 0.40     # |오늘 감정 - 기준선| 이 값 이상이면 급변
+# 감정 기준표(SENTIMENT_SCALE) 도입으로 점수 눈금이 좁아져서 함께 낮췄다.
+# 같은 기사 154건을 두 프롬프트로 채점해 재 보니 표준편차가 0.459 -> 0.305,
+# 압축비 0.665 였다. 옛 값(0.40/0.50/0.70)에 그 비율을 곱하면 0.27/0.33/0.47 이고,
+# 재계산한 실제 |delta| 분포(0.66 0.53 0.49 0.46 0.33 0.29 ...)에 맞춰 다듬었다.
+THRESHOLD     = 0.25     # |오늘 감정 - 기준선| 이 값 이상이면 급변
+SEVERITY_HIGH = 0.50     # |delta| 가 이 값 이상이면 high
+SEVERITY_MID  = 0.35     # 이 값 이상이면 mid
 NEWS_PER_TICKER = 10     # 종목당 수집할 뉴스 개수
 PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 위한 조회 범위
 CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
@@ -385,10 +391,10 @@ def compute_baseline(history_avgs, today_avg):
 
 
 def classify_severity(abs_delta):
-    """|delta| → 심각도. ≥0.7 high, ≥0.5 mid, 그 외 low."""
-    if abs_delta >= 0.7:
+    """|delta| → 심각도. 경계는 SEVERITY_HIGH / SEVERITY_MID."""
+    if abs_delta >= SEVERITY_HIGH:
         return "high"
-    if abs_delta >= 0.5:
+    if abs_delta >= SEVERITY_MID:
         return "mid"
     return "low"
 

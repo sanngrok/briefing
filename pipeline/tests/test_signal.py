@@ -12,6 +12,8 @@ import pytest
 from pipeline import (
     compute_baseline,
     classify_severity,
+    SEVERITY_HIGH,
+    SEVERITY_MID,
     decide_signal,
     MIN_NEWS,
     THRESHOLD,
@@ -30,12 +32,11 @@ def test_baseline_without_history_falls_back_to_today():
 
 # --- classify_severity (경계값) --------------------------------------
 @pytest.mark.parametrize("abs_delta,expected", [
-    (0.7, "high"),
-    (0.95, "high"),
-    (0.69, "mid"),
-    (0.5, "mid"),
-    (0.499, "low"),
-    (0.4, "low"),
+    (SEVERITY_HIGH, "high"),            # 경계 포함
+    (SEVERITY_HIGH + 0.3, "high"),
+    (SEVERITY_HIGH - 0.001, "mid"),
+    (SEVERITY_MID, "mid"),              # 경계 포함
+    (SEVERITY_MID - 0.001, "low"),
     (0.0, "low"),
 ])
 def test_classify_severity_boundaries(abs_delta, expected):
@@ -44,16 +45,17 @@ def test_classify_severity_boundaries(abs_delta, expected):
 
 # --- decide_signal: 발화 방향 ----------------------------------------
 def test_signal_fires_positive():
-    d = decide_signal(avg=0.6, baseline=0.0, news_count=5)
+    avg = SEVERITY_MID + 0.01          # mid 구간에 확실히 들어가는 값
+    d = decide_signal(avg=avg, baseline=0.0, news_count=5)
     assert d["type"] == "sentiment_surge_pos"
-    assert d["delta"] == pytest.approx(0.6)
+    assert d["delta"] == pytest.approx(avg)
     assert d["severity"] == "mid"
 
 
 def test_signal_fires_negative():
-    d = decide_signal(avg=-0.5, baseline=0.3, news_count=4)
+    d = decide_signal(avg=-(SEVERITY_HIGH + 0.2), baseline=0.0, news_count=4)
     assert d["type"] == "sentiment_surge_neg"
-    assert d["delta"] == pytest.approx(-0.8)
+    assert d["delta"] == pytest.approx(-(SEVERITY_HIGH + 0.2))
     assert d["severity"] == "high"
 
 
@@ -64,7 +66,7 @@ def test_no_signal_when_too_few_news():
 
 
 def test_no_signal_when_delta_below_threshold():
-    assert decide_signal(avg=0.30, baseline=0.0, news_count=10) is None
+    assert decide_signal(avg=THRESHOLD / 2, baseline=0.0, news_count=10) is None
 
 
 def test_no_signal_when_no_history_delta_zero():
@@ -73,8 +75,13 @@ def test_no_signal_when_no_history_delta_zero():
 
 
 # --- decide_signal: 경계값(>= 포함) ----------------------------------
+def test_severity_boundaries_are_ordered():
+    """임계치를 조정할 때 순서가 뒤집히면 시그널 체계가 깨진다."""
+    assert 0 < THRESHOLD <= SEVERITY_MID < SEVERITY_HIGH
+
+
 def test_signal_fires_at_exact_threshold():
-    # |delta| == THRESHOLD(0.40) 는 발화(>=), 심각도 low
+    # |delta| == THRESHOLD 는 발화(>=), 심각도 low
     d = decide_signal(avg=THRESHOLD, baseline=0.0, news_count=MIN_NEWS)
     assert d is not None
     assert d["severity"] == "low"
@@ -85,12 +92,13 @@ def test_no_signal_just_below_threshold():
 
 
 def test_signal_fires_at_exact_min_news():
-    assert decide_signal(avg=0.5, baseline=0.0, news_count=MIN_NEWS) is not None
+    assert decide_signal(avg=SEVERITY_HIGH, baseline=0.0, news_count=MIN_NEWS) is not None
 
 
 # --- decide_signal: 파라미터 튜닝 주입 --------------------------------
 def test_thresholds_are_injectable():
-    # 기본값이면 미발화지만, threshold 를 낮추면 발화
-    assert decide_signal(avg=0.2, baseline=0.0, news_count=2) is None
-    d = decide_signal(avg=0.2, baseline=0.0, news_count=2, min_news=2, threshold=0.15)
+    # 기본값이면 미발화(기사 수 부족)지만, 주입하면 발화
+    assert decide_signal(avg=THRESHOLD, baseline=0.0, news_count=2) is None
+    d = decide_signal(avg=THRESHOLD, baseline=0.0, news_count=2,
+                      min_news=2, threshold=THRESHOLD)
     assert d is not None and d["type"] == "sentiment_surge_pos"

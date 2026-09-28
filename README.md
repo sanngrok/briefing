@@ -394,6 +394,10 @@ gh secret set RENDER_DEPLOY_HOOK      # 프롬프트에 붙여넣기 (화면에 
 
 - 종목별 그날 뉴스 **평균 감정(-1~1)** 계산.
 - **기준선** = 직전 `BASELINE_DAYS`(기본 5)일 평균 감정.
-- 그날 기사 수 ≥ `MIN_NEWS`(기본 3) **AND** |오늘 - 기준선| ≥ `THRESHOLD`(기본 0.40) → 시그널 발화.
+- 그날 기사 수 ≥ `MIN_NEWS`(기본 3) **AND** |오늘 - 기준선| ≥ `THRESHOLD`(기본 0.25) → 시그널 발화.
 - 방향: delta>0 → `sentiment_surge_pos`, delta<0 → `sentiment_surge_neg`.
-- 심각도: |delta| ≥0.7 `high`, ≥0.5 `mid`, 그 외 `low`.
+- 심각도: |delta| ≥`SEVERITY_HIGH`(0.50) `high`, ≥`SEVERITY_MID`(0.35) `mid`, 그 외 `low`.
+
+> 감정 점수는 프롬프트의 **기준표**(`SENTIMENT_SCALE`)로 매깁니다 — 사건 유형을 눈금에
+> 묶어 주지 않으면 모델이 0.8/0.5 몇 개 값으로 몰려 점수가 사실상 이진값이 됩니다.
+> 임계치는 그 눈금 폭에 맞춰 환산한 값입니다(PROGRESS §8-H).

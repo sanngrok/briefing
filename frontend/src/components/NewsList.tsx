@@ -10,11 +10,15 @@ import type { NewsItem } from '../api/client'
 //
 // ±0.15 경계는 서버의 NEWS_DIRECTION_THRESHOLD 와 같아야 한다 — 다르면 같은 기사가
 // 목록에서는 '중립' 인데 악재 탭에 들어가는 일이 생긴다.
+// 경계 ±0.6 은 기준표(SENTIMENT_SCALE)의 앵커를 따른다 — 그 위가 '호실적·목표주가
+// 상향·대형 계약' 이상이다. 이번 주 분포에 맞춰 다시 잡지 않는 이유는, 라벨이
+// 절대적인 뜻을 가져야 하기 때문이다. 큰 악재가 없던 주에는 '악재' 배지가 하나도
+// 안 뜨는 게 맞다.
 function tone(sentiment?: number | null) {
   const s = sentiment ?? 0
-  if (s >= 0.5) return { cls: 'good-strong', label: '호재' }
+  if (s >= 0.6) return { cls: 'good-strong', label: '호재' }
   if (s >= 0.15) return { cls: 'good', label: '약호재' }
-  if (s <= -0.5) return { cls: 'bad-strong', label: '악재' }
+  if (s <= -0.6) return { cls: 'bad-strong', label: '악재' }
   if (s <= -0.15) return { cls: 'bad', label: '약악재' }
   return { cls: 'flat', label: '중립' }
 }
