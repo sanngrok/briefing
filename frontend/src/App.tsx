@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api/client'
 import type { Movers, NewsItem, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
-import { DisclaimerBadge } from './components/DisclaimerBadge'
 import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
@@ -146,7 +145,6 @@ export default function App() {
           {report && <span className="date-pill mono">{report.date}</span>}
         </div>
         <p className="subtitle">국내 주식 뉴스 감정을 매일 분석해 급변 시그널을 찾습니다.</p>
-        <DisclaimerBadge />
         <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.length} />
       </header>
 
@@ -241,7 +239,6 @@ export default function App() {
       </section>
 
       <footer className="footer">
-        <DisclaimerBadge />
       </footer>
     </div>
   )

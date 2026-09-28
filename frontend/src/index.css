@@ -1,64 +1,83 @@
 /* =====================================================================
-   디자인 토큰 — 라이트 단일 테마
-   흰 배경(패널) + 옅은 회색 바탕, 강조는 인디고, 감정은 청록/로즈.
+   디자인 토큰 — 토스(Toss) 스타일 라이트 테마
+
+   토스 앱의 특징을 따랐다.
+   - 차가운 회색 바탕(#f2f4f6) 위에 테두리 없는 흰 카드. 경계는 선이 아니라
+     여백과 배경 대비로 만든다.
+   - 큰 라운드(16~20px), 그림자는 거의 쓰지 않는다.
+   - 숫자는 크고 굵게(700), 라벨은 작고 흐리게. 정보 위계를 굵기로 준다.
+   - 입력창은 테두리 대신 회색 채움.
+   - 등락은 국내 관행대로 상승 빨강 / 하락 파랑 (토스와 같다).
    ===================================================================== */
 :root {
   color-scheme: light;
 
-  /* 표면 */
-  --bg: #f6f7f9;
+  /* 표면 — 토스 그레이 스케일 */
+  --bg: #f2f4f6;
   --panel: #ffffff;
-  --panel-2: #fafbfc;
-  --panel-3: #f2f4f7;
+  --panel-2: #f9fafb;
+  --panel-3: #f2f4f6;
 
   /* 텍스트 */
-  --text: #14181f;
-  --muted: #6b7385;
-  --faint: #98a0b3;
+  --text: #191f28;
+  --text-2: #4e5968;
+  --muted: #8b95a1;
+  --faint: #b0b8c1;
 
-  /* 선 */
-  --border: #e8eaf0;
-  --border-strong: #d5d9e3;
+  /* 선 — 카드 경계가 아니라 목록 구분용으로만 쓴다 */
+  --border: #f2f4f6;
+  --border-strong: #e5e8eb;
 
-  /* 브랜드 */
-  --accent: #4f46e5;
-  --accent-soft: #eef0fe;
+  /* 브랜드 — 토스 블루 */
+  --accent: #3182f6;
+  --accent-strong: #1b64da;
+  --accent-soft: #e8f3ff;
   --accent-on: #ffffff;
 
-  /* 감정 (긍정=청록, 부정=로즈) */
-  --pos: #0f9d76;
-  --pos-soft: #e6f6f1;
-  --neg: #e11d48;
-  --neg-soft: #fdeaef;
+  /* 감정 (긍정=그린, 부정=레드) */
+  --pos: #00c471;
+  --pos-soft: #e5f9f0;
+  --neg: #f04452;
+  --neg-soft: #fef1f2;
 
   /* 심각도 */
-  --danger: #e11d48;
-  --danger-bg: #fdeaef;
-  --danger-text: #b3123a;
+  --danger: #f04452;
+  --danger-bg: #fef1f2;
+  --danger-text: #d93c48;
 
-  --warn: #d97706;
-  --warn-bg: #fdf3e3;
-  --warn-text: #a35c05;
+  --warn: #ff9500;
+  --warn-bg: #fff6e5;
+  --warn-text: #c26f00;
 
-  --neutral: #b6bdcc;
-  --neutral-bg: #f2f4f7;
-  --neutral-text: #5b6376;
+  --neutral: #b0b8c1;
+  --neutral-bg: #f2f4f6;
+  --neutral-text: #6b7684;
 
   /* 등락 (국내 관행: 상승 빨강 / 하락 파랑) */
-  --up: #e5484d;
-  --down: #2f6feb;
+  --up: #f04452;
+  --down: #3182f6;
 
-  /* 그림자 */
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
-  --shadow-md: 0 2px 4px rgba(16, 24, 40, 0.04), 0 6px 16px rgba(16, 24, 40, 0.07);
+  /* 뉴스 호재/악재 — 등락과 같은 관행을 따른다.
+     호재는 주가를 올릴 재료라 빨강, 악재는 파랑. 감정 자체의 좋고 나쁨(--pos/--neg)과
+     다른 축이라 토큰을 따로 둔다. */
+  --good: var(--up);
+  --good-soft: #fef1f2;
+  --bad: var(--down);
+  --bad-soft: #e8f3ff;
 
-  --radius: 14px;
-  --radius-sm: 9px;
+  /* 그림자 — 토스는 카드에 그림자를 거의 쓰지 않는다 */
+  --shadow-sm: none;
+  --shadow-md: 0 4px 16px rgba(25, 31, 40, 0.06);
+
+  --radius-lg: 20px;
+  --radius: 16px;
+  --radius-sm: 12px;
 
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui,
     'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
@@ -68,8 +87,9 @@
 body {
   margin: 0;
   background: var(--bg);
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
 }
 
 a {
@@ -84,16 +104,15 @@ a {
 .app {
   max-width: 1040px;
   margin: 0 auto;
-  padding: 32px 20px 64px;
+  padding: 28px 16px 72px;
 }
 
 /* ---- 헤더 ---- */
 .header {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: 22px 24px 24px;
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 26px 24px 24px;
 }
 
 .brand-row {
@@ -105,9 +124,9 @@ a {
 
 .title {
   margin: 0;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 
 .subtitle {
@@ -117,8 +136,8 @@ a {
 }
 
 .date-pill {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 999px;
@@ -126,16 +145,6 @@ a {
   white-space: nowrap;
 }
 
-.disclaimer {
-  display: flex;
-  gap: 6px;
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  font-size: 12.5px;
-  margin-top: 16px;
-}
 
 /* ---- KPI 스트립 ---- */
 .kpi {
@@ -153,8 +162,8 @@ a {
 
 .kpi-card {
   background: var(--panel-3);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
+  border-radius: 14px;
+  padding: 14px 16px;
 }
 
 .kpi-label {
@@ -165,9 +174,9 @@ a {
 }
 
 .kpi-value {
-  font-size: 25px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
@@ -191,7 +200,7 @@ a {
 
 /* ---- 섹션 ---- */
 .section {
-  margin-top: 36px;
+  margin-top: 40px;
 }
 
 .section-title {
@@ -199,10 +208,10 @@ a {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 8px;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 14px;
 }
 
 .section-hint {
@@ -229,12 +238,13 @@ a {
 
 .empty {
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 14px;
   background: var(--panel);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 18px;
+  border: none;
+  border-radius: var(--radius);
+  padding: 24px;
   margin: 0;
+  text-align: center;
 }
 
 /* ---- 시그널 카드 ---- */
@@ -246,11 +256,15 @@ a {
 
 .sigcard {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-left-width: 3px;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
-  padding: 13px 15px;
+  border: none;
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  transition: transform 0.12s ease;
+}
+
+.sigcard:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 .sigcard.sev-high {
   border-left-color: var(--danger);
@@ -310,10 +324,9 @@ a {
 /* ---- 패널 ---- */
 .panel {
   background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  padding: 16px 18px;
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 20px 22px;
 }
 
 .panel-flush {
@@ -363,13 +376,24 @@ a {
 
 .pf-field input {
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: var(--panel-3);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
+  font-weight: 500;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.pf-field input::placeholder {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.pf-field input:hover {
+  background: #edeff2;
 }
 
 .pf-field input:focus-visible {
@@ -384,19 +408,20 @@ a {
 }
 
 .pf-btn {
-  padding: 8px 14px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
+  padding: 11px 18px;
+  border: none;
+  border-radius: 14px;
+  background: var(--panel-3);
+  color: var(--text-2);
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .pf-btn:hover:not(:disabled) {
-  background: var(--panel-3);
+  background: #e5e8eb;
 }
 
 .pf-btn:disabled {
@@ -411,13 +436,12 @@ a {
 
 .pf-btn-primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--accent-on);
 }
 
 .pf-btn-primary:hover:not(:disabled) {
-  filter: brightness(1.06);
-  background: var(--accent);
+  filter: none;
+  background: var(--accent-strong);
 }
 
 .pf-btn-sm {
@@ -451,8 +475,8 @@ a {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -498,10 +522,10 @@ a {
 }
 
 .pf-table th {
-  padding: 7px 10px;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--border-strong);
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -509,7 +533,7 @@ a {
 
 .pf-table td {
   padding: 9px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
   vertical-align: top;
 }
 
@@ -640,7 +664,7 @@ a {
   font-weight: 650;
   padding-bottom: 8px;
   margin-bottom: 4px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
 }
 
 .mover-list {
@@ -655,7 +679,7 @@ a {
   align-items: center;
   gap: 10px;
   padding: 8px 2px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
 }
 .mover-row:last-child {
   border-bottom: none;
@@ -708,7 +732,7 @@ a {
 .mover-date {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-strong);
   font-size: 11.5px;
   color: var(--faint);
   text-align: right;
@@ -725,7 +749,7 @@ a {
   display: flex;
   gap: 14px;
   padding: 13px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
 }
 .newsrow:last-child {
   border-bottom: none;
@@ -759,21 +783,21 @@ a {
   opacity: 0.85;
 }
 
-.news-score.pos-strong {
-  background: var(--pos);
+.news-score.good-strong {
+  background: var(--good);
   color: #fff;
 }
-.news-score.pos {
-  background: var(--pos-soft);
-  color: var(--pos);
+.news-score.good {
+  background: var(--good-soft);
+  color: var(--good);
 }
-.news-score.neg-strong {
-  background: var(--neg);
+.news-score.bad-strong {
+  background: var(--bad);
   color: #fff;
 }
-.news-score.neg {
-  background: var(--neg-soft);
-  color: var(--neg);
+.news-score.bad {
+  background: var(--bad-soft);
+  color: var(--bad);
 }
 .news-score.flat {
   background: var(--neutral-bg);
@@ -846,7 +870,7 @@ a {
 }
 
 .tab {
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   background: var(--panel);
   color: var(--muted);
   border-radius: 999px;
@@ -879,7 +903,7 @@ a {
   flex-wrap: wrap;
   gap: 10px;
   padding: 0 2px 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
   margin-bottom: 8px;
 }
 
@@ -918,7 +942,7 @@ a {
 /* ---- 리포트 ---- */
 .report {
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
   padding: 20px 24px;
@@ -930,7 +954,7 @@ a {
   font-size: 11.5px;
   margin-bottom: 12px;
   padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
   font-variant-numeric: tabular-nums;
 }
 .report h1,
@@ -964,7 +988,7 @@ a {
 }
 .report hr {
   border: none;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--border-strong);
   margin: 18px 0;
 }
 .report blockquote {

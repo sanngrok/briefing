@@ -1,12 +1,13 @@
 import type { NewsItem } from '../api/client'
 
 // 감정 점수 → 표시용 등급. 색과 라벨을 여기서 한 번에 결정한다.
+// 색은 국내 관행을 따른다 — 호재(주가를 올릴 재료)는 빨강, 악재는 파랑.
 function tone(sentiment?: number | null) {
   const s = sentiment ?? 0
-  if (s >= 0.5) return { cls: 'pos-strong', label: '긍정' }
-  if (s >= 0.15) return { cls: 'pos', label: '약긍정' }
-  if (s <= -0.5) return { cls: 'neg-strong', label: '부정' }
-  if (s <= -0.15) return { cls: 'neg', label: '약부정' }
+  if (s >= 0.5) return { cls: 'good-strong', label: '호재' }
+  if (s >= 0.15) return { cls: 'good', label: '약호재' }
+  if (s <= -0.5) return { cls: 'bad-strong', label: '악재' }
+  if (s <= -0.15) return { cls: 'bad', label: '약악재' }
   return { cls: 'flat', label: '중립' }
 }
 
