@@ -7,6 +7,9 @@
 portfolio.json
 portfolio-*.json
 
+# launchd 자동 동기화 로그 (보유 종목·계좌 흔적이 남는다)
+tools/logs/
+
 # --- Python ---
 __pycache__/
 *.py[cod]

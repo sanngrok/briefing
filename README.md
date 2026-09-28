@@ -264,7 +264,28 @@ python tools/toss_sync.py --include-us      # 해외(USD) 종목까지 포함
 
 ```bash
 python -m pytest tools/tests -v   # 변환 로직 단위 테스트 (키·네트워크 불필요)
+python tools/toss_sync.py --dump-raw   # 토스가 주는 원본 필드 확인 (공유 주의)
 ```
+
+### 동기화 자동 실행 (macOS launchd)
+
+평일 장마감 후 `portfolio.json` 이 자동으로 갱신되게 할 수 있습니다.
+
+```bash
+./tools/install_launchd.sh              # 등록 (.venv 의 python 사용)
+./tools/install_launchd.sh --uninstall  # 해제
+```
+
+- **평일 16:30** 에 `toss_sync.py --include-us` 가 돕니다(장 마감 15:30 뒤 체결 정리 시간을 둠).
+- 로그: `tools/logs/tosssync.log` (보유 종목이 남으므로 `.gitignore` 대상입니다).
+- 지금 한 번 돌려보기: `launchctl kickstart -k gui/$(id -u)/com.briefing.tosssync`
+- 등록 확인: `launchctl list | grep briefing`
+
+> ⚠️ **파일만 자동으로 갱신됩니다.** 대시보드 반영은 여전히 **가져오기**를 눌러야 합니다 —
+> 보유 정보가 브라우저 `localStorage` 에만 있기 때문입니다(하드룰 §4). 완전 자동화는
+> 인증(Supabase Auth)과 쓰기 엔드포인트가 생긴 뒤의 일입니다.
+>
+> 맥이 꺼져 있거나 잠들어 있으면 그 시각 실행은 건너뜁니다(깨어날 때 한 번 보충 실행됩니다).
 
 > 토스증권 Open API 문서: https://developers.tossinvest.com/docs
 

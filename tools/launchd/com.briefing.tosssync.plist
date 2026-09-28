@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  토스증권 잔고 동기화 자동 실행 (macOS launchd)
+
+  평일 16:30 에 tools/toss_sync.py 를 돌려 portfolio.json 을 갱신한다.
+  __REPO__ / __PYTHON__ 은 tools/install_launchd.sh 가 실제 경로로 바꿔 넣는다.
+
+  주의: 이 잡은 파일만 갱신한다. 대시보드 반영은 브라우저에서 '가져오기' 를
+  눌러야 한다 — 보유 정보가 localStorage 에만 있기 때문이다(하드룰 §4).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.briefing.tosssync</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__REPO__/tools/toss_sync.py</string>
+    <string>--include-us</string>
+  </array>
+
+  <!-- toss_sync.py 가 .env 를 상대경로로 읽으므로 반드시 필요하다 -->
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <!-- 평일(월=1 … 금=5) 16:30. 장 마감(15:30) 뒤 체결이 정리될 시간을 둔다 -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+
+  <!-- 등록하자마자 한 번 돌지는 않는다. 확인은 install 스크립트가 안내하는
+       launchctl kickstart 로 직접 한다 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/tools/logs/tosssync.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/tools/logs/tosssync.err.log</string>
+</dict>
+</plist>

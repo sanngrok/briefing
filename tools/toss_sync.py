@@ -253,8 +253,14 @@ def main(argv=None) -> int:
     parser.add_argument("--list-accounts", action="store_true", help="계좌 목록만 출력하고 종료")
     parser.add_argument(
         "--include-us", action="store_true",
-        help="해외(USD) 종목도 포함. 당일 USD/KRW 환율(frankfurter.app)로 원화 환산합니다 "
+        help="해외(USD) 종목도 포함. 값은 달러 그대로 저장하고 당일 환율을 "
+             "fxAtImport 로 함께 남깁니다(대시보드가 현재 환율로 환산) "
              "— 환율을 못 구하면 이번에도 국내 종목만 저장합니다",
+    )
+    parser.add_argument(
+        "--dump-raw", metavar="PATH", nargs="?", const="-",
+        help="보유 종목 원본 응답을 그대로 출력/저장합니다(필드 확인용). "
+             "종목·수량이 그대로 들어 있으니 공유에 주의하세요",
     )
     args = parser.parse_args(argv)
 
@@ -287,6 +293,19 @@ def main(argv=None) -> int:
             print("USD/KRW 환율을 가져오지 못해 해외 종목은 이번에도 제외합니다.", file=sys.stderr)
 
     overview = client.holdings(account["accountSeq"])
+
+    if args.dump_raw:
+        # 토스가 어떤 필드를 주는지 확인할 때 쓴다(원화 매입금액이 오는지 등).
+        # 계좌번호처럼 민감한 식별자는 응답에 없지만, 종목·수량은 그대로 들어 있다.
+        text = json.dumps(overview, ensure_ascii=False, indent=2)
+        if args.dump_raw == "-":
+            print(text)
+        else:
+            with open(args.dump_raw, "w", encoding="utf-8") as f:
+                f.write(text)
+            print(f"원본 응답 저장 → {args.dump_raw}")
+        return 0
+
     holdings, skipped = to_holdings(overview, include_us=args.include_us, fx_rate=fx_rate)
 
     payload = build_export(holdings)
