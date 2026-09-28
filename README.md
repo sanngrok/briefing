@@ -160,7 +160,8 @@ python -m pytest api/tests -v      # Supabase 없이 라우팅·검증·404/422 
 ## 프론트엔드 (레이어 C, Vercel)
 
 Vite + React + TypeScript + Recharts. severity 색상 시그널 카드 + 종가·감정 시계열 차트 +
-react-markdown 리포트 + "투자 판단 근거 아님" 라벨(하드룰 §2).
+react-markdown 리포트. 면책 문구는 리포트 본문 끝에 파이프라인이 결정론적으로
+붙이므로(`REPORT_DISCLAIMER`), 화면에서는 리포트 안에 표시된다(하드룰 §2).
 
 ```bash
 cd frontend
