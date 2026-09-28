@@ -880,7 +880,22 @@ a {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-on);
-  font-weight: 550;
+  font-weight: 600;
+}
+
+/* 뉴스 호재/악재 탭은 활성 시 배지와 같은 색을 쓴다 */
+.news-tabs {
+  margin-bottom: 12px;
+}
+
+.tab.tab-good.active {
+  background: var(--good);
+  border-color: var(--good);
+}
+
+.tab.tab-bad.active {
+  background: var(--bad);
+  border-color: var(--bad);
 }
 .tab:focus-visible {
   outline: 2px solid var(--accent);

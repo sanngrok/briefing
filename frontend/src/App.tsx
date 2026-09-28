@@ -5,7 +5,7 @@ import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
 import { MoversPanel } from './components/MoversPanel'
-import { NewsList } from './components/NewsList'
+import { NewsList, NEWS_SHOWN } from './components/NewsList'
 import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
@@ -58,7 +58,7 @@ export default function App() {
       .catch(() => setTickers([]))
     api.latestReport().then(setReport).catch(() => setReport(null))
     api.signals().then(setSignals).catch(() => setSignals([]))
-    api.news({ limit: 12 }).then(setNews).catch(() => setNews([]))
+    api.news({ limit: 50 }).then(setNews).catch(() => setNews([]))
     api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
   }, [])
 
@@ -145,7 +145,7 @@ export default function App() {
           {report && <span className="date-pill mono">{report.date}</span>}
         </div>
         <p className="subtitle">국내 주식 뉴스 감정을 매일 분석해 급변 시그널을 찾습니다.</p>
-        <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.length} />
+        <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={Math.min(news.length, NEWS_SHOWN)} />
       </header>
 
       <section className="section">
