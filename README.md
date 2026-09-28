@@ -246,6 +246,10 @@ python tools/toss_sync.py --include-us      # 해외(USD) 종목까지 포함
 
 - 호출하는 것은 `GET /oauth2/token` · `/api/v1/accounts` · `/api/v1/holdings` **세 개뿐**입니다.
   주문 엔드포인트는 스크립트 어디에서도 부르지 않습니다.
+- 해외 종목은 **달러 그대로** 저장되고(`currency: "USD"`), 대시보드가 현재 환율로
+  환산해 보여줍니다. 평단과 현재가가 같은 환율로 환산되므로 **수익률이 증권사 화면과
+  일치**합니다. 동기화 시점 환율(`fxAtImport`)은 대시보드가 현재 환율을 못 구했을 때의
+  폴백으로 함께 저장됩니다.
 - 기본값은 **국내(KRW) 종목만**입니다. 대시보드 합계가 원화 기준이라 환산 없이 달러 종목을
   섞으면 매입금액 합계의 통화가 뒤섞이기 때문입니다. `--include-us` 를 주면 당일 USD/KRW
   환율(공개 API [frankfurter.app](https://frankfurter.app), 인증 정보 없이 호출)로 원화 환산해
