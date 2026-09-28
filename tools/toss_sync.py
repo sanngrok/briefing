@@ -207,10 +207,15 @@ class TossClient:
             reset = res.headers.get("X-RateLimit-Reset", "?")
             raise SystemExit(f"호출 한도를 초과했습니다. {reset}초 후 다시 시도하세요.")
         if res.status_code in (401, 403):
-            # 토큰/키 값은 절대 출력하지 않는다.
+            # 키·토큰 값은 절대 출력하지 않는다. 다만 어느 단계에서 막혔는지와
+            # 토스가 뭐라고 하는지는 보여준다 — 그게 없으면 원인을 좁힐 수 없다.
+            where = getattr(getattr(res, "request", None), "url", "") or ""
+            where = where.replace(self._base, "") or "?"
             raise SystemExit(
-                "인증에 실패했습니다 (%d). TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 과 "
-                "앱에서 발급한 키가 일치하는지 확인하세요." % res.status_code
+                "인증에 실패했습니다 (%d) — %s\n토스 응답: %s\n"
+                "TOSS_CLIENT_ID/TOSS_CLIENT_SECRET 이 앱에서 발급한 키와 같은지, "
+                "Open API 신청이 아직 유효한지 확인하세요."
+                % (res.status_code, where, (res.text or "")[:300])
             )
         if not res.ok:
             raise SystemExit(f"API 오류 {res.status_code}: {res.text[:200]}")
@@ -321,8 +326,8 @@ def main(argv=None) -> int:
         print(f"\n해외 종목 {len(skipped)}건은 제외했습니다 ({', '.join(skipped)}).")
         print("대시보드 합계가 원화 기준이라 통화가 섞이기 때문입니다. 포함하려면 --include-us")
     elif fx_rate:
-        print(f"\n해외 종목은 당일 환율(1달러 ≈ {fx_rate:,.0f}원)로 환산해 포함했습니다.")
-        print("환산 시점 스냅샷이라 대시보드에 '가져온 시세'로 표시되며, 실시간으로 갱신되지 않습니다.")
+        print(f"\n해외 종목은 달러 그대로 저장했습니다(오늘 환율 1달러 ≈ {fx_rate:,.0f}원 함께 기록).")
+        print("대시보드가 평단·시세를 같은 환율로 환산하므로 수익률은 증권사 달러 화면과 일치합니다.")
     print("\n대시보드 '내 포트폴리오' → 가져오기 에서 이 파일을 선택하세요.")
     return 0
 
