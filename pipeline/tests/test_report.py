@@ -298,3 +298,13 @@ def test_round_numbers_leaves_non_numbers_alone():
     from pipeline import round_numbers
     assert round_numbers({"a": "문자열", "b": 3, "c": None, "d": True}) == {
         "a": "문자열", "b": 3, "c": None, "d": True}
+
+
+def test_report_retry_budget_covers_sustained_outage(report_env, monkeypatch):
+    """지속형 503 을 넘길 만큼 기다리는지. 2026-09-28 실행이 70초로는 모자랐다."""
+    saved, slept = report_env
+    _responses(monkeypatch, [FakeAPIError(503, "x")] * (P.REPORT_ATTEMPTS - 1) + [GOOD])
+    P.build_report([])
+    assert len(saved) == 1
+    assert slept == [15, 30, 60, 120]          # 지수 백오프
+    assert sum(slept) >= 200                   # 3분 이상 버틴다

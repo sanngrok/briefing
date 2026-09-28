@@ -46,10 +46,13 @@ PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 �
 CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
 REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
 SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
-REPORT_ATTEMPTS = 4     # 리포트 생성 총 시도 횟수(형태 불량·일시적 오류 공통)
+# 최근 다섯 번 중 두 번이 리포트 단계의 503 만으로 죽었다. 4회/70초로는 무료 티어의
+# 지속형 과부하를 못 넘긴다(2026-09-28 실행이 10·20·40초를 다 쓰고도 실패).
+# 5회/225초로 늘렸다 — 감정분석과 달리 하루 한 번뿐이라 길게 기다려도 된다.
+REPORT_ATTEMPTS = 5     # 리포트 생성 총 시도 횟수(형태 불량·일시적 오류 공통)
 SENTIMENT_ATTEMPTS = 2      # 감정 분석 총 시도 횟수. 기사 수만큼 도는 경로라 짧게 잡는다
 SENTIMENT_RETRY_SECONDS = 5 # 감정 분석 재시도 대기
-REPORT_RETRY_SECONDS = 10   # 일시적 오류 재시도 대기. 지수 백오프(10 -> 20 -> 40초)
+REPORT_RETRY_SECONDS = 15   # 지수 백오프(15 -> 30 -> 60 -> 120초, 합 225초)
 
 TODAY = date.today()
 
