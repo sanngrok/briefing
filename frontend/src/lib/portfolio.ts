@@ -13,7 +13,23 @@ export interface Holding {
   symbol: string
   name: string
   quantity: number
+  /**
+   * 평균 매입가 — **`currency` 통화 기준**이다.
+   *
+   * 해외 종목을 동기화 시점 환율로 원화 환산해 박제했더니, 평단은 과거 환율이고
+   * 현재가는 오늘 환율이라 수익률에 환율 변동이 섞였다(토스 +6.03% vs 우리
+   * +4.70%, 차이가 정확히 그날 사이 환율 변동분이었다). 그래서 원종목 통화로
+   * 두고 표시할 때 현재 환율로 환산한다 — 평단과 현재가가 **같은 환율**로
+   * 환산되면 수익률에서 환율이 약분돼 증권사 화면과 일치한다.
+   */
   avgPrice: number
+  /** 없으면 KRW. 기존 저장본과의 호환을 위해 선택 항목으로 둔다. */
+  currency?: 'KRW' | 'USD'
+  /**
+   * 가져오기 시점의 원/달러 환율. 화면이 현재 환율을 못 구했을 때의 폴백이다.
+   * USD 종목은 이 값이 있어야 원화로 환산할 수 있어, 없으면 KRW 로 취급한다.
+   */
+  fxAtImport?: number | null
   memo?: string
   /**
    * 가져오기(toss_sync.py 등) 시점의 시세 스냅샷 — 워치리스트에 시세가 없는 종목
@@ -22,6 +38,15 @@ export interface Holding {
    */
   importedClose?: number | null
   importedChangePct?: number | null
+}
+
+/** USD 종목을 원화로 환산할 때 쓸 환율. 국내 종목은 1. (순수 함수) */
+export function resolveFxRate(h: Holding, fxUsdKrw?: number | null): number {
+  if (h.currency !== 'USD') return 1
+  if (fxUsdKrw != null && Number.isFinite(fxUsdKrw) && fxUsdKrw > 0) return fxUsdKrw
+  const fallback = h.fxAtImport
+  if (fallback != null && Number.isFinite(fallback) && fallback > 0) return fallback
+  return 1 // parseHoldings 가 환율 없는 USD 를 KRW 로 눕히므로 실제로는 닿지 않는다
 }
 
 /** 폼 입력값(문자열 그대로). 검증을 거쳐 Holding 이 된다. */
@@ -35,6 +60,8 @@ export interface HoldingInput {
 
 /** 시세를 붙여 평가까지 끝낸 한 줄. 시세가 없으면 평가값은 null. */
 export interface HoldingRow extends Holding {
+  /** 현재 환율로 환산한 원화 평단. 국내 종목은 avgPrice 와 같다. */
+  avgPriceKrw: number
   close: number | null
   changePct: number | null
   cost: number
@@ -128,13 +155,30 @@ export function findDuplicate(
 }
 
 /** 같은 종목을 추가할 때 수량가중으로 평단가를 합친다(물타기). */
-export function mergeHolding(base: Holding, added: Holding): Holding {
-  const quantity = base.quantity + added.quantity
+export function mergeHolding(
+  base: Holding,
+  added: Holding,
+  fxUsdKrw?: number | null,
+): Holding {
+  // 통화가 다르면(USD 보유 종목 + 원화 직접 입력) 먼저 원화로 눕힌다. 통화가
+  // 섞인 채 가중평균을 내면 평단이 엉터리가 된다.
+  let start = base
+  if (base.currency === 'USD' && added.currency !== 'USD') {
+    const fx = resolveFxRate(base, fxUsdKrw)
+    const { currency: _c, fxAtImport: _f, ...rest } = base
+    start = {
+      ...rest,
+      avgPrice: base.avgPrice * fx,
+      ...(base.importedClose == null ? {} : { importedClose: base.importedClose * fx }),
+    }
+  }
+
+  const quantity = start.quantity + added.quantity
   const avgPrice =
     quantity > 0
-      ? (base.quantity * base.avgPrice + added.quantity * added.avgPrice) / quantity
-      : base.avgPrice
-  return { ...base, name: added.name || base.name, quantity, avgPrice }
+      ? (start.quantity * start.avgPrice + added.quantity * added.avgPrice) / quantity
+      : start.avgPrice
+  return { ...start, name: added.name || start.name, quantity, avgPrice }
 }
 
 // --------------------------------------------------------------------
@@ -149,24 +193,39 @@ export function previousClose(close: number, changePct: number | null | undefine
   return close / ratio
 }
 
-/** 보유 목록에 시세를 붙여 평가 결과를 만든다. 시세가 없으면 평가값은 null. */
-export function computeRows(holdings: Holding[], quotes: QuoteLike[]): HoldingRow[] {
+/**
+ * 보유 목록에 시세를 붙여 평가 결과를 만든다. 시세가 없으면 평가값은 null.
+ *
+ * `fxUsdKrw` 는 현재 원/달러 환율(/api/quotes 가 함께 내려준다). USD 종목의
+ * 평단·가져온 시세를 이 환율로 환산한다. 서버가 내려주는 close 도 같은 환율로
+ * 환산된 원화라, 평단과 현재가가 같은 환율을 쓰게 되어 수익률에서 환율이
+ * 약분된다 — 증권사가 보여주는 (달러 기준) 수익률과 일치한다.
+ */
+export function computeRows(
+  holdings: Holding[],
+  quotes: QuoteLike[],
+  fxUsdKrw?: number | null,
+): HoldingRow[] {
   const bySymbol = new Map<string, QuoteLike>()
   for (const q of quotes ?? []) bySymbol.set(normalizeSymbol(q.symbol), q)
 
   const rows: HoldingRow[] = (holdings ?? []).map((h) => {
     const quote = bySymbol.get(h.symbol)
+    const fx = resolveFxRate(h, fxUsdKrw)
+    const avgPriceKrw = h.avgPrice * fx
+    const importedCloseKrw = h.importedClose == null ? null : h.importedClose * fx
     const hasLiveQuote = quote?.close != null
-    const close = quote?.close ?? h.importedClose ?? null
+    const close = quote?.close ?? importedCloseKrw ?? null
     const changePct = quote?.change_pct ?? h.importedChangePct ?? null
     const priceSource = hasLiveQuote ? 'live' : close !== null ? 'imported' : null
-    const cost = h.quantity * h.avgPrice
+    const cost = h.quantity * avgPriceKrw
     const value = close === null ? null : h.quantity * close
     const pnl = value === null ? null : value - cost
     const returnPct = pnl === null || cost <= 0 ? null : (pnl / cost) * 100
     const prev = close === null ? null : previousClose(close, changePct)
     const dayPnl = close === null || prev === null ? null : (close - prev) * h.quantity
-    return { ...h, close, changePct, cost, value, pnl, returnPct, dayPnl, weight: null, priceSource }
+    return { ...h, avgPriceKrw, close, changePct, cost, value, pnl, returnPct,
+             dayPnl, weight: null, priceSource }
   })
 
   // 비중은 평가금액 합계 대비 — 합계가 나온 뒤에야 계산할 수 있다.
@@ -247,12 +306,20 @@ export function parseHoldings(raw: unknown): Holding[] {
     const memo = typeof o.memo === 'string' ? o.memo.trim() : ''
     const importedClose = Number(o.importedClose)
     const importedChangePct = Number(o.importedChangePct)
+
+    // USD 로 표시된 값은 환율이 있어야 원화로 환산할 수 있다. 환율이 없으면
+    // 원화로 취급한다 — 통화 개념이 없던 시절의 저장본이 그렇게 저장돼 있다.
+    const fxAtImport = Number(o.fxAtImport)
+    const hasFx = Number.isFinite(fxAtImport) && fxAtImport > 0
+    const isUsd = o.currency === 'USD' && hasFx
+
     out.push({
       id: typeof o.id === 'string' && o.id ? o.id : `${symbol}-${out.length}`,
       symbol,
       name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : symbol,
       quantity,
       avgPrice,
+      ...(isUsd ? { currency: 'USD' as const, fxAtImport } : {}),
       ...(memo ? { memo } : {}),
       ...(Number.isFinite(importedClose) ? { importedClose } : {}),
       ...(Number.isFinite(importedChangePct) ? { importedChangePct } : {}),

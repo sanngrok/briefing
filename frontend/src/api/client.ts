@@ -67,6 +67,8 @@ export interface Quotes {
   quotes: Quote[]
   /** true 면 close/change_pct 가 DB 종가가 아니라 장중 실시간(네이버, 비공식) 값이다. */
   live?: boolean
+  /** 해외 종목을 원화로 환산할 때 쓴 원/달러 환율 (해외 종목을 물었을 때만). */
+  fx_usdkrw?: number | null
 }
 
 export interface NewsItem {

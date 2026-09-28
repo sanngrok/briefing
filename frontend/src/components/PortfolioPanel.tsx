@@ -24,6 +24,8 @@ interface Props {
   holdings: Holding[]
   onChange: (next: Holding[]) => void
   quotes: Quote[]
+  /** 현재 원/달러 환율 — USD 보유 종목을 원화로 환산할 때 쓴다. */
+  fxUsdKrw?: number | null
   quoteDate?: string | null
   quotesLive?: boolean
   tickers: Ticker[]
@@ -35,6 +37,7 @@ export function PortfolioPanel({
   holdings,
   onChange,
   quotes,
+  fxUsdKrw,
   quoteDate,
   quotesLive,
   tickers,
@@ -47,7 +50,10 @@ export function PortfolioPanel({
   const [notice, setNotice] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const rows = useMemo(() => sortByReturn(computeRows(holdings, quotes)), [holdings, quotes])
+  const rows = useMemo(
+    () => sortByReturn(computeRows(holdings, quotes, fxUsdKrw)),
+    [holdings, quotes, fxUsdKrw],
+  )
   const totals = useMemo(() => computeTotals(rows), [rows])
 
   // 보유 종목에 걸린 시그널 — 심각도가 가장 높은 것 하나를 배지로 보여준다.
@@ -102,7 +108,7 @@ export function PortfolioPanel({
       flash(`${holding.name} 수정됨`)
     } else if (duplicate) {
       // 같은 종목 재매수 → 수량가중 평단으로 합친다.
-      const merged = mergeHolding(duplicate, holding)
+      const merged = mergeHolding(duplicate, holding, fxUsdKrw)
       onChange(holdings.map((h) => (h.id === duplicate.id ? merged : h)))
       flash(`${merged.name} 추가 매수로 합산 (평단 ${formatWon(merged.avgPrice)}원)`)
     } else {
@@ -119,7 +125,8 @@ export function PortfolioPanel({
       symbol: row.symbol,
       name: row.name,
       quantity: String(row.quantity),
-      avgPrice: String(row.avgPrice),
+      // 직접 입력은 늘 원화다. USD 보유 종목을 수정하면 원화 종목이 된다.
+      avgPrice: String(Math.round(row.avgPriceKrw)),
       memo: row.memo ?? '',
     })
   }
@@ -321,7 +328,7 @@ export function PortfolioPanel({
                         {r.memo && <span className="pf-memo">{r.memo}</span>}
                       </td>
                       <td className="num mono">{r.quantity.toLocaleString('ko-KR')}</td>
-                      <td className="num mono">{formatWon(r.avgPrice)}</td>
+                      <td className="num mono">{formatWon(r.avgPriceKrw)}</td>
                       <td className="num mono">
                         {r.close === null ? (
                           <span className="pf-noquote">시세 없음</span>

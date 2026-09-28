@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api/client'
 import type { Movers, NewsItem, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { SummaryStrip } from './components/SummaryStrip'
@@ -33,6 +33,8 @@ export default function App() {
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [quoteDate, setQuoteDate] = useState<string | null>(null)
   const [quotesLive, setQuotesLive] = useState(false)
+  // USD 보유 종목의 평단을 현재 환율로 환산하는 데 쓴다(수익률에서 환율 약분).
+  const [fxUsdKrw, setFxUsdKrw] = useState<number | null>(null)
   const [storageFailed, setStorageFailed] = useState(false)
 
   // 해외 종목을 들고 있을 때만 미국 장 시간(한국 새벽)에도 폴링한다.
@@ -41,6 +43,14 @@ export default function App() {
   useEffect(() => {
     hasWorldHoldingRef.current = holdings.some((h) => isWorldSymbol(h.symbol))
   }, [holdings])
+
+  // 시세를 물을 종목 목록. 보유 종목을 지정해야 워치리스트 밖 종목과 해외 종목도
+  // 시세가 붙는다(종목을 안 주면 서버가 워치리스트만 돌려준다). 수량·평단만
+  // 고친 경우에는 목록이 그대로라 폴링을 다시 시작하지 않도록 문자열로 묶는다.
+  const symbolsKey = useMemo(
+    () => [...new Set(holdings.map((h) => h.symbol))].sort().join(','),
+    [holdings],
+  )
 
   function updateHoldings(next: Holding[]) {
     setHoldings(next)
@@ -76,13 +86,17 @@ export default function App() {
     let timer: number | undefined
 
     function loadQuotes() {
+      // 보유 종목이 없으면 종목을 지정하지 않는다 — 워치리스트 기준일이라도
+      // 받아 와야 화면 하단의 "OOOO 종가 기준" 표시가 비지 않는다.
+      const symbols = symbolsKey ? symbolsKey.split(',') : undefined
       api
-        .quotes()
+        .quotes(symbols ? { symbols } : undefined)
         .then((q) => {
           if (cancelled) return
           setQuotes(q.quotes)
           setQuoteDate(q.date ?? null)
           setQuotesLive(q.live ?? false)
+          setFxUsdKrw(q.fx_usdkrw ?? null)
         })
         .catch(() => {
           if (!cancelled) setQuotes([])
@@ -118,7 +132,7 @@ export default function App() {
       if (timer !== undefined) window.clearTimeout(timer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [])
+  }, [symbolsKey])
 
   useEffect(() => {
     if (!symbol) return
@@ -159,6 +173,7 @@ export default function App() {
           quotes={quotes}
           quoteDate={quoteDate}
           quotesLive={quotesLive}
+          fxUsdKrw={fxUsdKrw}
           tickers={tickers}
           signals={signals}
           storageFailed={storageFailed}
