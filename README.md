@@ -342,6 +342,24 @@ PORTFOLIO_ALIAS_OVERRIDES = {
 > Secrets 등록 전에는 스케줄이 돌아도 파이프라인이 키 없음으로 실패합니다(정상).
 > 등록 후 *Run workflow* 로 1회 수동 실행해 Supabase 적재를 확인하세요.
 
+### API 배포 트리거 (deploy-render.yml)
+
+Render 의 GitHub 연동이 이벤트를 못 받는 일이 반복돼(Events 탭에 아무것도 안 찍힘,
+Auto-Deploy 는 `On Commit` 인데도 배포가 안 걸림), 배포를 GitHub Actions 에서 직접
+찌릅니다. Deploy Hook 은 호출만 하면 배포가 시작되는 비밀 URL 이라 연동 상태와
+무관하게 동작합니다.
+
+```bash
+# Render → 서비스 → Settings → Deploy Hook 에서 URL 복사 후
+gh secret set RENDER_DEPLOY_HOOK      # 프롬프트에 붙여넣기 (화면에 안 찍힘)
+```
+
+- `api/**` 나 `runtime.txt` 가 바뀐 `main` push 에만 돕니다. 프론트 전용 커밋은
+  Vercel 이 알아서 하므로 불필요한 배포가 가지 않습니다.
+- Actions 탭 → `deploy-render` → *Run workflow* 로 수동 배포도 됩니다.
+- 시크릿이 없으면 무엇을 등록해야 하는지 안내하고 실패합니다. URL 은 로그에
+  출력되지 않습니다.
+
 ---
 
 ## 개발 로드맵 (마일스톤)

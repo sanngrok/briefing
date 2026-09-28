@@ -1,0 +1,50 @@
+name: deploy-render
+
+# Render 의 GitHub 연동이 이벤트를 못 받는 일이 반복돼서(Events 탭에 아무것도 안
+# 찍힘) 배포를 여기서 직접 찌른다. Deploy Hook 은 호출만 하면 배포가 시작되는
+# 비밀 URL 이라 GitHub 연동 상태와 무관하게 동작한다.
+#
+# 필요한 것: repo Secrets 에 RENDER_DEPLOY_HOOK
+#   Render → 해당 서비스 → Settings → Deploy Hook 에서 URL 복사 후
+#   gh secret set RENDER_DEPLOY_HOOK   (값은 입력 프롬프트에 붙여넣기)
+
+on:
+  push:
+    branches: [main]
+    # 서빙 API 에 영향이 있는 변경만. 프론트 전용 커밋은 Vercel 이 알아서 한다.
+    paths:
+      - 'api/**'
+      - 'runtime.txt'
+      - '.github/workflows/deploy-render.yml'
+  workflow_dispatch: {}   # 수동 배포용
+
+concurrency:
+  group: deploy-render
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy Hook 호출
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::error::RENDER_DEPLOY_HOOK 시크릿이 없습니다."
+            echo "Render → Settings → Deploy Hook 의 URL 을 등록하세요:"
+            echo "  gh secret set RENDER_DEPLOY_HOOK"
+            exit 1
+          fi
+          # 응답 본문에 배포 id 가 들어온다. URL 자체는 절대 출력하지 않는다.
+          code=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST "$HOOK")
+          echo "HTTP $code"
+          cat /tmp/resp.json
+          echo
+          case "$code" in
+            2*) echo "배포를 시작했습니다. 진행 상황은 Render 의 Events 탭에서 확인하세요." ;;
+            *)  echo "::error::Deploy Hook 호출 실패 (HTTP $code)"; exit 1 ;;
+          esac
