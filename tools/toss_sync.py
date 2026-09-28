@@ -46,8 +46,14 @@ def to_holding(item: dict, fx_rate: float = None) -> dict:
     id 는 종목코드로 고정한다 — 다시 동기화해도 같은 종목이 같은 id 를 갖게 해,
     '가져오기' 로 덮어써도 행이 뒤섞이지 않는다.
 
-    해외 종목은 평단·현재가가 원종목 통화(대개 USD)로 온다. fx_rate(원/달러)를
-    주면 원화로 환산하고, 국내 종목이거나 fx_rate 가 없으면 그대로 둔다.
+    해외 종목은 평단·현재가가 원종목 통화(대개 USD)로 온다. **그 통화 그대로**
+    저장하고 currency='USD' 와 그날 환율(fxAtImport)을 함께 남긴다.
+
+    예전에는 여기서 원화로 환산해 박제했는데, 그러면 평단은 동기화 시점 환율,
+    현재가는 오늘 환율이 되어 수익률에 환율 변동이 섞였다(실측: 토스 +6.03% 인
+    종목이 대시보드에서 +4.70%, 차이가 정확히 그 사이 환율 변동분이었다).
+    대시보드가 평단과 현재가를 같은(현재) 환율로 환산하면 수익률에서 환율이
+    약분돼 증권사 화면과 일치한다.
 
     lastPrice · dailyProfitLoss.rate 는 importedClose/importedChangePct 로도
     내보낸다 — 대시보드가 워치리스트에 시세가 없는 종목(해외 종목, 워치리스트
@@ -56,19 +62,23 @@ def to_holding(item: dict, fx_rate: float = None) -> dict:
     """
     symbol = str(item.get("symbol") or "").strip()
     is_krw = (item.get("currency") or item.get("marketCountry")) in ("KRW", "KR")
-    rate = 1.0 if is_krw else (fx_rate or 1.0)
 
     holding = {
         "id": f"toss-{symbol}",
         "symbol": symbol,
         "name": str(item.get("name") or symbol).strip() or symbol,
         "quantity": float(item.get("quantity") or 0),
-        "avgPrice": float(item.get("averagePurchasePrice") or 0) * rate,
+        "avgPrice": float(item.get("averagePurchasePrice") or 0),
+        "currency": "KRW" if is_krw else "USD",
     }
+    if not is_krw:
+        # 대시보드가 현재 환율을 못 구했을 때의 폴백. 이 값이 없으면 대시보드는
+        # 원화로 환산할 수 없어 해당 종목을 원화 종목으로 취급한다.
+        holding["fxAtImport"] = float(fx_rate) if fx_rate else None
 
     last_price = item.get("lastPrice")
     if last_price not in (None, ""):
-        holding["importedClose"] = float(last_price) * rate
+        holding["importedClose"] = float(last_price)
 
     daily_rate = (item.get("dailyProfitLoss") or {}).get("rate")
     if daily_rate not in (None, ""):
@@ -84,9 +94,10 @@ def to_holdings(overview: dict, include_us: bool = False, fx_rate: float = None)
     시세도 KRX 가 우선이므로, 환율 없이 달러 종목을 섞으면 매입금액 합계의
     통화가 뒤섞인 엉터리 숫자가 된다.
 
-    --include-us 로 켜면 fx_rate(원/달러)로 환산해 포함한다. include_us 가
-    True 여도 fx_rate 를 못 구했으면(환율 API 실패 등) 안전하게 계속 건너뛴다 —
-    통화를 안 맞춘 채 섞는 것보다 낫다.
+    --include-us 로 켜면 포함한다. 값은 달러 그대로 두되, 대시보드가 환산할 수
+    있도록 그날 환율(fxAtImport)을 함께 남기므로 fx_rate 가 여전히 필요하다.
+    fx_rate 를 못 구했으면(환율 API 실패 등) 안전하게 계속 건너뛴다 — 환산할
+    길이 없는 달러 금액을 원화 합계에 섞는 것보다 낫다.
 
     수량 0(전량 매도 후 잔재)과 종목코드가 빈 항목은 버린다.
     """
@@ -284,7 +295,9 @@ def main(argv=None) -> int:
 
     print(f"계좌 {mask_account_no(account.get('accountNo'))} · 보유 {len(holdings)}종목 → {args.out}")
     for h in holdings:
-        print(f"  {h['symbol']}  {h['name']}  {h['quantity']:g}주  평단 {h['avgPrice']:,.0f}")
+        unit = "원" if h.get("currency", "KRW") == "KRW" else " USD"
+        print(f"  {h['symbol']}  {h['name']}  {h['quantity']:g}주  "
+              f"평단 {h['avgPrice']:,.2f}{unit}")
     if skipped:
         print(f"\n해외 종목 {len(skipped)}건은 제외했습니다 ({', '.join(skipped)}).")
         print("대시보드 합계가 원화 기준이라 통화가 섞이기 때문입니다. 포함하려면 --include-us")

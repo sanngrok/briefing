@@ -93,12 +93,24 @@ def test_to_holding_id_is_stable_across_syncs():
     assert to_holding(item())["id"] == to_holding(item(quantity="7"))["id"]
 
 
-def test_to_holding_converts_usd_with_fx_rate():
-    """해외 종목은 fx_rate(원/달러)를 주면 평단·현재가를 원화로 환산한다."""
+def test_to_holding_keeps_usd_and_records_fx_rate():
+    """해외 종목은 달러 그대로 두고 그날 환율을 남긴다.
+
+    원화로 환산해 박제하면 평단은 과거 환율·현재가는 오늘 환율이 되어 수익률에
+    환율 변동이 섞인다. 대시보드가 둘을 같은 환율로 환산하도록 통화를 넘긴다.
+    """
     h = to_holding(usd_item(), fx_rate=1400.0)
-    assert h["avgPrice"] == pytest.approx(176.84 * 1400.0)
-    assert h["importedClose"] == pytest.approx(177.78 * 1400.0)
+    assert h["currency"] == "USD"
+    assert h["fxAtImport"] == pytest.approx(1400.0)
+    assert h["avgPrice"] == pytest.approx(176.84)
+    assert h["importedClose"] == pytest.approx(177.78)
     assert h["importedChangePct"] == pytest.approx(0.07)
+
+
+def test_to_holding_marks_domestic_as_krw():
+    h = to_holding(item(), fx_rate=1400.0)
+    assert h["currency"] == "KRW"
+    assert "fxAtImport" not in h
 
 
 def test_to_holding_leaves_usd_unconverted_without_fx_rate():
@@ -127,15 +139,16 @@ def test_to_holdings_include_us_requires_fx_rate():
     assert skipped == ["팔란티어"]
 
 
-def test_to_holdings_include_us_converts_with_fx_rate():
+def test_to_holdings_include_us_keeps_usd_with_fx_rate():
     holdings, skipped = to_holdings(
         {"items": [item(), usd_item()]}, include_us=True, fx_rate=1400.0,
     )
     assert [h["symbol"] for h in holdings] == ["005930", "PLTR"]
     assert skipped == []
     pltr = holdings[1]
-    assert pltr["avgPrice"] == pytest.approx(176.84 * 1400.0)
-    assert pltr["importedClose"] == pytest.approx(177.78 * 1400.0)
+    assert pltr["currency"] == "USD" and pltr["fxAtImport"] == pytest.approx(1400.0)
+    assert pltr["avgPrice"] == pytest.approx(176.84)
+    assert pltr["importedClose"] == pytest.approx(177.78)
 
 
 def test_to_holdings_drops_zero_quantity_and_blank_symbol():
