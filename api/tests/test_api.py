@@ -97,6 +97,7 @@ def _quotes_never_live_by_default(monkeypatch):
     """
     monkeypatch.setattr("api.routers.quotes.is_market_live_window", lambda: False)
     monkeypatch.setattr("api.routers.quotes.fetch_world_quotes", lambda symbols: {})
+    monkeypatch.setattr("api.routers.quotes.fetch_usd_krw", lambda: 1300.0)
 
 
 # --- health ----------------------------------------------------------
@@ -288,7 +289,8 @@ def test_quotes_skips_unknown_symbol_instead_of_404():
 def test_quotes_empty_symbols_returns_nothing():
     r = client.get("/api/quotes?symbols=")
     assert r.status_code == 200
-    assert r.json() == {"date": "2026-07-24", "quotes": [], "live": False}
+    assert r.json() == {"date": "2026-07-24", "quotes": [], "live": False,
+                        "fx_usdkrw": None}
 
 
 def test_quotes_rejects_bad_date():
@@ -524,3 +526,24 @@ def test_quotes_mixed_domestic_and_world(monkeypatch):
     assert [q["symbol"] for q in body["quotes"]] == ["AAPL", "005930"]
     assert body["quotes"][1]["close"] == 280000.0
     assert body["live"] is True
+
+
+# ---- 환율을 함께 내려주는가 (프론트가 평단 환산에 쓴다) ----
+def test_quotes_returns_fx_when_world_symbol_requested(monkeypatch):
+    """해외 종목을 물으면 환산에 쓴 환율을 같이 내린다."""
+    _world_on(monkeypatch, {"AAPL": {"close": 1.0, "change_pct": 0.0, "name": "애플",
+                                     "market_open": False}})
+    assert client.get("/api/quotes?symbols=AAPL").json()["fx_usdkrw"] == 1300.0
+
+
+def test_quotes_omits_fx_for_domestic_only(monkeypatch):
+    """국내 종목만 물으면 환율을 부르지도, 내리지도 않는다."""
+    calls = []
+    monkeypatch.setattr("api.routers.quotes.fetch_usd_krw",
+                        lambda: calls.append(1) or 1300.0)
+    assert client.get("/api/quotes?symbols=005930").json()["fx_usdkrw"] is None
+    assert calls == []
+
+
+def test_quotes_explicit_date_omits_fx(monkeypatch):
+    assert client.get("/api/quotes?date=2026-07-24&symbols=AAPL").json()["fx_usdkrw"] is None

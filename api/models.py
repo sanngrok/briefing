@@ -93,3 +93,7 @@ class Quotes(BaseModel):
     quotes: list[Quote] = []
     # True 면 close/change_pct 가 DB 종가가 아니라 장중 실시간(네이버, 비공식) 값이다.
     live: bool = False
+    # 해외 종목을 원화로 환산할 때 쓴 원/달러 환율. 해외 종목을 요청했고 환율을
+    # 구했을 때만 채워진다. 프론트가 보유 평단(달러)을 같은 환율로 환산해
+    # 수익률에서 환율이 약분되게 하려고 함께 내린다.
+    fx_usdkrw: Optional[float] = None

@@ -17,8 +17,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from api.db import ReadRepo, get_repo
-from api.live_quotes import (fetch_live_quotes, fetch_world_quotes,
-                             is_market_live_window, kst_today)
+from api.live_quotes import (fetch_live_quotes, fetch_usd_krw, fetch_world_quotes,
+                             is_krx_code, is_market_live_window, kst_today)
 from api.models import Quotes
 from api.services import build_quotes, merge_live_quotes
 
@@ -59,6 +59,7 @@ def list_quotes(
     quotes = build_quotes(repo.prices_on(target), wanted)
 
     live = False
+    fx = None
     if date is None:
         # 요청받은 종목 전부를 묻는다 — DB 시세 행이 없어 build_quotes 에서 빠진
         # 종목(워치리스트 밖 보유 종목, 해외 종목)도 채워 넣기 위해서다.
@@ -80,7 +81,13 @@ def list_quotes(
             live_map.update(world)
             live = live or any(w["market_open"] for w in world.values())
 
+        # 해외 종목을 물었다면 환산에 쓴 환율을 함께 내린다. 프론트가 보유 평단
+        # (달러)을 같은 환율로 환산해야 수익률에서 환율이 약분되기 때문이다.
+        # fetch_usd_krw 는 한 시간 캐시라 추가 호출 비용이 사실상 없다.
+        if any(not is_krx_code(s) for s in ask):
+            fx = fetch_usd_krw()
+
         if live_map:
             quotes = merge_live_quotes(quotes, live_map, wanted, kst_today())
 
-    return {"date": target, "quotes": quotes, "live": live}
+    return {"date": target, "quotes": quotes, "live": live, "fx_usdkrw": fx}
