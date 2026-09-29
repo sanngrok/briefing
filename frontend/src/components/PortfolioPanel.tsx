@@ -17,6 +17,7 @@ import {
   validateHolding,
 } from '../lib/portfolio'
 import type { Holding, HoldingInput, HoldingRow } from '../lib/portfolio'
+import type { Status } from './LoadState'
 
 const EMPTY_FORM: HoldingInput = { symbol: '', name: '', quantity: '', avgPrice: '', memo: '' }
 
@@ -31,6 +32,8 @@ interface Props {
   tickers: Ticker[]
   signals: Signal[]
   storageFailed?: boolean
+  /** 시세 호출 상태. 실패를 "시세 없음"으로 뭉개지 않기 위해 따로 받는다. */
+  quotesStatus?: Status
 }
 
 export function PortfolioPanel({
@@ -43,6 +46,7 @@ export function PortfolioPanel({
   tickers,
   signals,
   storageFailed,
+  quotesStatus = 'ready',
 }: Props) {
   const [form, setForm] = useState<HoldingInput>(EMPTY_FORM)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -375,9 +379,15 @@ export function PortfolioPanel({
       <div className="pf-foot">
         <span className="pf-foot-note mono">
           {rows.length > 0 &&
-            `${quotesLive ? '실시간(장중, 네이버 금융 기준 · 15초마다 갱신)' : quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
-              totals.unpricedCount > 0 ? ` · 시세 없는 ${totals.unpricedCount}건은 평가 제외` : ''
-            }`}
+            (quotesStatus === 'loading'
+              ? '시세 불러오는 중…'
+              : quotesStatus === 'error'
+                ? '시세를 불러오지 못했습니다 · 잠시 뒤 자동으로 다시 시도합니다'
+                : `${quotesLive ? '실시간(장중, 네이버 금융 기준 · 15초마다 갱신)' : quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
+                    totals.unpricedCount > 0
+                      ? ` · 시세 없는 ${totals.unpricedCount}건은 평가 제외`
+                      : ''
+                  }`)}
         </span>
         <span className="pf-foot-btns">
           <button

@@ -37,3 +37,6 @@ frontend/vite.config.d.ts
 Thumbs.db
 .idea/
 .vscode/
+
+# --- Playwright MCP 가 스냅샷·콘솔 로그를 떨구는 자리 ---
+.playwright-mcp/
