@@ -10,6 +10,8 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import type { MetricPoint } from '../api/client'
+import { LoadState } from './LoadState'
+import type { Status } from './LoadState'
 
 // SVG 속성은 CSS 변수를 못 받으므로 index.css 팔레트와 같은 값을 고정으로 둔다.
 const GRID = '#e8eaf0'
@@ -17,7 +19,20 @@ const TICK = '#8b93a7'
 const PRICE = '#4f46e5' // --accent
 const SENT = '#0f9d76' // --pos
 
-export function SentimentChart({ data }: { data: MetricPoint[] }) {
+export function SentimentChart({
+  data,
+  status,
+  onRetry,
+}: {
+  data: MetricPoint[]
+  status: Status
+  onRetry?: () => void
+}) {
+  if (status !== 'ready') {
+    return (
+      <LoadState status={status} rows={5} onRetry={onRetry} label="종목 추이를 불러오지 못했습니다." />
+    )
+  }
   if (data.length === 0) {
     return <p className="empty">표시할 시세 데이터가 없습니다.</p>
   }

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import type { NewsItem } from '../api/client'
+import { LoadState } from './LoadState'
+import type { Status } from './LoadState'
 
 // 감정 점수 → 표시용 등급. 색과 라벨을 여기서 한 번에 결정한다.
 // 색은 국내 관행을 따른다 — 호재(주가를 올릴 재료)는 빨강, 악재는 파랑.
@@ -58,7 +60,15 @@ function timeOf(iso?: string | null) {
   })
 }
 
-export function NewsList({ lists }: { lists: NewsLists }) {
+export function NewsList({
+  lists,
+  status,
+  onRetry,
+}: {
+  lists: NewsLists
+  status: Status
+  onRetry?: () => void
+}) {
   const [filter, setFilter] = useState<NewsDirection>('all')
   const items = (lists[filter] ?? []).slice(0, NEWS_SHOWN)
 
@@ -72,13 +82,16 @@ export function NewsList({ lists }: { lists: NewsLists }) {
             className={`tab tab-${t.key}${filter === t.key ? ' active' : ''}`}
             onClick={() => setFilter(t.key)}
             aria-pressed={filter === t.key}
+            disabled={status !== 'ready'}
           >
             {t.label}
           </button>
         ))}
       </div>
 
-      {items.length === 0 ? (
+      {status !== 'ready' ? (
+        <LoadState status={status} rows={4} onRetry={onRetry} label="뉴스를 불러오지 못했습니다." />
+      ) : items.length === 0 ? (
         <p className="empty">{EMPTY[filter]}</p>
       ) : (
         <ul className="newslist">

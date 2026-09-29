@@ -1,4 +1,6 @@
 import type { Mover, Movers } from '../api/client'
+import { LoadState } from './LoadState'
+import type { Status } from './LoadState'
 
 // 등락률 |x| 가 이 값 이상이면 '급등락'으로 강조 (국내 대형주 기준 체감치)
 const SHARP = 5
@@ -47,7 +49,20 @@ function Column({
   )
 }
 
-export function MoversPanel({ movers }: { movers: Movers | null }) {
+export function MoversPanel({
+  movers,
+  status,
+  onRetry,
+}: {
+  movers: Movers | null
+  status: Status
+  onRetry?: () => void
+}) {
+  if (status !== 'ready') {
+    return (
+      <LoadState status={status} rows={5} onRetry={onRetry} label="시세를 불러오지 못했습니다." />
+    )
+  }
   if (!movers || (movers.gainers.length === 0 && movers.losers.length === 0)) {
     return <p className="empty">표시할 시세 데이터가 없습니다.</p>
   }

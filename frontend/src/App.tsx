@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api/client'
 import type { Movers, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
+import { LoadState } from './components/LoadState'
+import type { Status } from './components/LoadState'
 import { SummaryStrip } from './components/SummaryStrip'
 import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
@@ -12,6 +14,17 @@ import { PortfolioPanel } from './components/PortfolioPanel'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
 import type { Holding } from './lib/portfolio'
 import { isMarketLiveWindow, isUsMarketWindow, isWorldSymbol } from './lib/market'
+
+/** 첫 화면을 채우는 호출들. 각각 따로 실패할 수 있어 상태도 따로 든다. */
+type CoreKey = 'tickers' | 'report' | 'signals' | 'news' | 'movers'
+
+const ALL_LOADING: Record<CoreKey, Status> = {
+  tickers: 'loading',
+  report: 'loading',
+  signals: 'loading',
+  news: 'loading',
+  movers: 'loading',
+}
 
 // 장중엔 15초마다 새로 부른다(서버가 네이버 실시간 값을 덮어써 주므로).
 const QUOTE_POLL_MS = 15000
@@ -29,7 +42,12 @@ export default function App() {
   const [movers, setMovers] = useState<Movers | null>(null)
   const [metrics, setMetrics] = useState<TickerMetrics | null>(null)
   const [symbol, setSymbol] = useState('')
-  const [loadError, setLoadError] = useState(false)
+
+  // 로딩·실패·빈 결과를 화면에서 구분하기 위한 상태. 예전에는 실패하면 조용히
+  // 빈 값을 넣어서, API 가 죽어도 "시그널이 없습니다"라고 말했다.
+  const [coreStatus, setCoreStatus] = useState<Record<CoreKey, Status>>(ALL_LOADING)
+  const [metricsStatus, setMetricsStatus] = useState<Status>('loading')
+  const [quotesStatus, setQuotesStatus] = useState<Status>('loading')
 
   // 내 포트폴리오: 개인 매매 정보라 서버에 보내지 않고 이 브라우저에만 둔다.
   const [holdings, setHoldings] = useState<Holding[]>(() => loadHoldings())
@@ -61,25 +79,81 @@ export default function App() {
   }
 
   // 워치리스트는 서버가 가진 것을 그대로 따른다(프론트 하드코딩 금지).
-  useEffect(() => {
+  //
+  // 다섯 호출을 한 함수로 묶어 둔 건 "다시 시도" 버튼이 같은 일을 다시 해야 하기
+  // 때문이다. 상태는 호출별로 따로 세워서, 하나가 죽어도 나머지 섹션은 정상으로
+  // 보이게 한다.
+  const loadCore = useCallback(() => {
+    setCoreStatus(ALL_LOADING)
+
+    function mark(key: CoreKey, status: Status) {
+      setCoreStatus((prev) => ({ ...prev, [key]: status }))
+    }
+
     api
       .tickers()
       .then((list) => {
         setTickers(list)
-        if (list.length > 0) setSymbol(list[0].symbol)
+        // 이미 고른 종목은 유지한다 — 재시도로 차트 탭이 첫 종목으로 튀지 않게.
+        if (list.length > 0) setSymbol((prev) => prev || list[0].symbol)
+        mark('tickers', 'ready')
       })
-      .catch(() => setTickers([]))
-    api.latestReport().then(setReport).catch(() => setReport(null))
-    api.signals().then(setSignals).catch(() => setSignals([]))
+      .catch(() => {
+        setTickers([])
+        mark('tickers', 'error')
+      })
+
+    api
+      .latestReport()
+      .then((r) => {
+        setReport(r)
+        mark('report', 'ready')
+      })
+      .catch(() => {
+        setReport(null)
+        mark('report', 'error')
+      })
+
+    api
+      .signals()
+      .then((s) => {
+        setSignals(s)
+        mark('signals', 'ready')
+      })
+      .catch(() => {
+        setSignals([])
+        mark('signals', 'error')
+      })
+
     Promise.all([
       api.news({ limit: NEWS_SHOWN }),
       api.news({ limit: NEWS_SHOWN, direction: 'good' }),
       api.news({ limit: NEWS_SHOWN, direction: 'bad' }),
     ])
-      .then(([all, good, bad]) => setNews({ all, good, bad }))
-      .catch(() => setNews({ all: [], good: [], bad: [] }))
-    api.movers({ limit: 5 }).then(setMovers).catch(() => setMovers(null))
+      .then(([all, good, bad]) => {
+        setNews({ all, good, bad })
+        mark('news', 'ready')
+      })
+      .catch(() => {
+        setNews({ all: [], good: [], bad: [] })
+        mark('news', 'error')
+      })
+
+    api
+      .movers({ limit: 5 })
+      .then((m) => {
+        setMovers(m)
+        mark('movers', 'ready')
+      })
+      .catch(() => {
+        setMovers(null)
+        mark('movers', 'error')
+      })
   }, [])
+
+  useEffect(() => {
+    loadCore()
+  }, [loadCore])
 
   // 포트폴리오 평가용 종가(워치리스트 전체를 한 번에). 장중엔 서버가 네이버
   // 실시간 값을 덮어써 주므로, 여기서 주기적으로 다시 불러오면 "준실시간"이 된다.
@@ -106,9 +180,12 @@ export default function App() {
           setQuoteDate(q.date ?? null)
           setQuotesLive(q.live ?? false)
           setFxUsdKrw(q.fx_usdkrw ?? null)
+          setQuotesStatus('ready')
         })
         .catch(() => {
-          if (!cancelled) setQuotes([])
+          if (cancelled) return
+          setQuotes([])
+          setQuotesStatus('error')
         })
     }
 
@@ -143,17 +220,24 @@ export default function App() {
     }
   }, [symbolsKey])
 
-  useEffect(() => {
+  const loadMetrics = useCallback(() => {
     if (!symbol) return
-    setLoadError(false)
+    setMetricsStatus('loading')
     api
       .metrics(symbol)
-      .then(setMetrics)
+      .then((m) => {
+        setMetrics(m)
+        setMetricsStatus('ready')
+      })
       .catch(() => {
         setMetrics(null)
-        setLoadError(true)
+        setMetricsStatus('error')
       })
   }, [symbol])
+
+  useEffect(() => {
+    loadMetrics()
+  }, [loadMetrics])
 
   // 차트 위 요약: 가장 최근 종가와 등락률 (국내 관행 = 상승 빨강 / 하락 파랑)
   const last = metrics?.series?.[metrics.series.length - 1]
@@ -168,7 +252,12 @@ export default function App() {
           {report && <span className="date-pill mono">{report.date}</span>}
         </div>
         <p className="subtitle">국내 주식 뉴스 감정을 매일 분석해 급변 시그널을 찾습니다.</p>
-        <SummaryStrip signals={signals} tickerCount={tickers.length} newsCount={news.all.length} />
+        <SummaryStrip
+          signals={signals}
+          tickerCount={tickers.length}
+          newsCount={news.all.length}
+          status={coreStatus}
+        />
       </header>
 
       <section className="section">
@@ -186,6 +275,7 @@ export default function App() {
           tickers={tickers}
           signals={signals}
           storageFailed={storageFailed}
+          quotesStatus={quotesStatus}
         />
       </section>
 
@@ -194,12 +284,19 @@ export default function App() {
           급등락 종목
           <span className="section-hint">워치리스트 등락률 상위 · ±5% 이상은 급등락 표시</span>
         </h2>
-        <MoversPanel movers={movers} />
+        <MoversPanel movers={movers} status={coreStatus.movers} onRetry={loadCore} />
       </section>
 
       <section className="section">
         <h2 className="section-title">오늘의 시그널</h2>
-        {signals.length === 0 ? (
+        {coreStatus.signals !== 'ready' ? (
+          <LoadState
+            status={coreStatus.signals}
+            rows={4}
+            onRetry={loadCore}
+            label="시그널을 불러오지 못했습니다."
+          />
+        ) : signals.length === 0 ? (
           <p className="empty">
             발화된 감정 급변 시그널이 없습니다. 감정 기준선 대비 큰 변화가 잡히면 여기에 표시됩니다.
           </p>
@@ -216,50 +313,62 @@ export default function App() {
           <span className="subsection-hint">감정 강도가 큰 순</span>
         </h3>
         <div className="panel panel-flush">
-          <NewsList lists={news} />
+          <NewsList lists={news} status={coreStatus.news} onRetry={loadCore} />
         </div>
       </section>
 
       <section className="section">
         <h2 className="section-title">종목 추이 (종가 · 평균 감정)</h2>
-        <div className="panel">
-          <div className="tabs">
-            {tickers.map((t) => (
-              <button
-                key={t.symbol}
-                className={t.symbol === symbol ? 'tab active' : 'tab'}
-                onClick={() => setSymbol(t.symbol)}
-              >
-                {t.name}
-              </button>
-            ))}
-          </div>
-
-          {metrics && last && (
-            <div className="quote">
-              <span className="quote-name">{metrics.name}</span>
-              <span className="quote-close mono">
-                {last.close != null ? last.close.toLocaleString('ko-KR') : '—'}
-              </span>
-              {change !== null && (
-                <span className={`quote-change mono dir-${dir}`}>
-                  {change > 0 ? '▲' : change < 0 ? '▼' : '—'} {Math.abs(change).toFixed(2)}%
-                </span>
-              )}
-              <span className="quote-date mono">{last.date}</span>
+        {/* 종목 목록이 없으면 고를 탭도, 부를 차트도 없다 — 여기서 먼저 끊는다.
+            그러지 않으면 symbol 이 비어 metrics 가 영원히 'loading' 에 머문다. */}
+        {coreStatus.tickers !== 'ready' ? (
+          <LoadState
+            status={coreStatus.tickers}
+            rows={5}
+            onRetry={loadCore}
+            label="종목 목록을 불러오지 못했습니다."
+          />
+        ) : (
+          <div className="panel">
+            <div className="tabs">
+              {tickers.map((t) => (
+                <button
+                  key={t.symbol}
+                  className={t.symbol === symbol ? 'tab active' : 'tab'}
+                  onClick={() => setSymbol(t.symbol)}
+                >
+                  {t.name}
+                </button>
+              ))}
             </div>
-          )}
 
-          {loadError && (
-            <p className="empty">데이터를 불러오지 못했습니다. (API 연결을 확인하세요)</p>
-          )}
-          <SentimentChart data={metrics?.series ?? []} />
-        </div>
+            {metrics && last && (
+              <div className="quote">
+                <span className="quote-name">{metrics.name}</span>
+                <span className="quote-close mono">
+                  {last.close != null ? last.close.toLocaleString('ko-KR') : '—'}
+                </span>
+                {change !== null && (
+                  <span className={`quote-change mono dir-${dir}`}>
+                    {change > 0 ? '▲' : change < 0 ? '▼' : '—'} {Math.abs(change).toFixed(2)}%
+                  </span>
+                )}
+                <span className="quote-date mono">{last.date}</span>
+              </div>
+            )}
+
+            <SentimentChart
+              data={metrics?.series ?? []}
+              status={metricsStatus}
+              onRetry={loadMetrics}
+            />
+          </div>
+        )}
       </section>
 
       <section className="section">
         <h2 className="section-title">일일 리포트</h2>
-        <ReportView report={report} />
+        <ReportView report={report} status={coreStatus.report} onRetry={loadCore} />
       </section>
 
       <footer className="footer">
