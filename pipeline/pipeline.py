@@ -26,7 +26,8 @@ import json
 import html
 import time
 import hashlib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
+from zoneinfo import ZoneInfo
 
 # third-party(requests/supabase/anthropic/pykrx) 는 각 사용처에서 지연 import 한다.
 # 덕분에 시세만 검증(pykrx만 필요)하는 등 일부 단계만 독립 실행할 수 있다.
@@ -70,7 +71,23 @@ SENTIMENT_TIMEOUT_MS = 20_000
 # 리포트는 본문이 길어 느리고, 하루 한 번뿐이라 넉넉히 준다.
 REPORT_TIMEOUT_MS = 120_000
 
-TODAY = date.today()
+# 날짜 기준은 한국 장이다. 예전에는 `date.today()` 로 러너 로컬(=UTC) 날짜를
+# 썼는데, 실행이 15:00 UTC 를 넘겨 밀리면 한국 날짜와 하루 어긋난다. 관측된
+# 최대 지연이 12.2시간이라 아직 터지지는 않았지만, 아침 실행으로 옮기면서
+# 기준을 명시한다.
+KST = ZoneInfo("Asia/Seoul")
+TODAY = datetime.now(KST).date()
+
+# 브리핑 기준 시각(KST). 이 시각을 경계로 하루치 구간을 자른다.
+#
+# 아침에 보는 리포트는 "오늘 장"을 다룰 수 없다 — 아직 열리지 않았다. 그래서
+# 오늘 날짜로 찍되 내용은 '직전 세션 마감 + 밤사이 뉴스'인 프리마켓 브리핑이다.
+#
+# 경계를 실제 실행 시각이 아니라 이 고정 시각으로 잡는 이유가 있다. GitHub cron 은
+# 중앙값 5시간 18분 밀리는데(최대 12.2시간), 실행 시각을 경계로 쓰면 리포트가
+# 다루는 구간이 그날 러너 사정에 따라 들쭉날쭉해진다. 고정해 두면 언제 돌든 같은
+# 구간을 다루고, 구간끼리 겹치거나 비지도 않는다.
+BRIEFING_CUTOFF_HOUR = 7
 
 # 외부 클라이언트는 지연(lazy) 생성한다.
 # 이렇게 하면 시세만 검증할 때(키 불필요)처럼 일부 단계만 import/실행할 수 있다.
@@ -457,12 +474,45 @@ def decide_signal(avg, baseline, news_count, *, min_news=MIN_NEWS, threshold=THR
     return {"type": stype, "severity": classify_severity(abs(delta)), "delta": delta}
 
 
+def previous_briefing_day(d: date) -> date:
+    """직전 브리핑이 돌았을 날. 주말은 건너뛴다(cron 이 월~금이므로).
+
+    월요일 아침 브리핑의 직전 브리핑은 금요일 아침이다. 그래서 월요일 구간은
+    금요일 07:00 ~ 월요일 07:00 의 72시간이 되고, 금요일 장과 주말 뉴스를 함께
+    담는다. 금요일 장은 금요일 아침 브리핑(목요일 장을 다룬다)에는 들어가지
+    않았으므로 중복이 아니다.
+    """
+    prev = d - timedelta(days=1)
+    while prev.weekday() >= 5:      # 5=토, 6=일
+        prev -= timedelta(days=1)
+    return prev
+
+
+def briefing_window(today: date = None, cutoff_hour: int = None):
+    """이 브리핑이 다루는 뉴스 구간 [start, end). KST 기준 aware datetime. (순수 함수)
+
+    직전 브리핑 시점부터 오늘 브리핑 시점까지다. 구간이 서로 겹치지 않으므로
+    같은 기사가 두 날의 집계에 들어가지 않는다 — 겹치면 오늘 평균과 기준선이
+    같은 기사를 공유해 delta 가 눌린다.
+    """
+    today = today or TODAY
+    cutoff_hour = BRIEFING_CUTOFF_HOUR if cutoff_hour is None else cutoff_hour
+    end = datetime.combine(today, dtime(cutoff_hour), tzinfo=KST)
+    start = datetime.combine(previous_briefing_day(today), dtime(cutoff_hour), tzinfo=KST)
+    return start, end
+
+
 def aggregate_and_signal(tickers):
+    # 이 브리핑이 다루는 구간. 아침 실행이라 '오늘 0시부터'로는 잡히는 기사가
+    # 거의 없다 — 직전 세션과 밤사이를 함께 봐야 한다.
+    win_start, win_end = briefing_window()
+    print(f"[aggregate] 구간 {win_start.isoformat()} ~ {win_end.isoformat()}")
     for t in tickers:
-        # 오늘 뉴스 감정 모으기
+        # 이 구간의 뉴스 감정 모으기
         today_news = get_sb().table("news").select("id,sentiment") \
             .eq("ticker_id", t["id"]) \
-            .gte("published_at", TODAY.isoformat()) \
+            .gte("published_at", win_start.isoformat()) \
+            .lt("published_at", win_end.isoformat()) \
             .execute().data
         sents = [n["sentiment"] for n in (today_news or []) if n["sentiment"] is not None]
         if not sents:
@@ -558,15 +608,19 @@ def round_numbers(value, ndigits: int = 3):
     return value
 
 
-def build_report_payload(signals_rows, daily_rows, name_of, report_date):
+def build_report_payload(signals_rows, daily_rows, name_of, report_date, covers=None):
     """리포트 LLM 에 넘길 근거 payload. 조회된 실제 행만으로 구성한다(그라운딩). (순수 함수)
 
     - signals: evidence(jsonb) 를 펼쳐 delta/avg/baseline/news_count 등을 노출.
     - sentiment: 종목별 일집계.
+    - covers: 이 리포트가 다루는 뉴스 구간(표시용). 아침 브리핑은 오늘 날짜로
+      찍히지만 내용은 직전 세션이라, 본문이 "오늘 장"을 말하지 않도록 구간을
+      근거에 실어 준다.
     - 데이터에 없는 값은 만들지 않는다.
     """
     return round_numbers({
         "date": report_date,
+        **({"covers": covers} if covers else {}),
         "signals": [
             {"name": name_of.get(s["ticker_id"]), "type": s["type"],
              "severity": s["severity"], **(s.get("evidence") or {})}
@@ -588,7 +642,11 @@ def build_report_prompt(payload):
         "규칙:\n"
         "- 데이터에 없는 수치·전망·목표가·투자의견은 절대 쓰지 마라.\n"
         "- 각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n"
-        "- 발화된 시그널이 없으면 '오늘은 감정 급변 시그널이 없습니다'라고 명시하라.\n"
+        "- 발화된 시그널이 없으면 '감정 급변 시그널이 없습니다'라고 명시하라.\n"
+        # 아침에 내보내는 프리마켓 브리핑이라 '오늘 장'은 아직 열리지 않았다.
+        # covers 구간을 무시하고 오늘 장을 논평하면 없는 사실을 지어내는 것이다.
+        "- covers 는 이 브리핑이 다루는 뉴스 구간이다. 그 구간을 벗어난 시점의 "
+        "장세·등락을 논평하지 마라.\n"
         "- 매수/매도 등 투자 권유 표현을 쓰지 마라.\n"
         "- 검토 과정·자기점검 메모를 쓰지 말고 리포트 본문만 출력하라.\n"
         f"- 리포트는 `{REPORT_HEADING}` 제목으로 시작하라.\n\n"
@@ -602,7 +660,10 @@ def build_report(tickers):
     daily = get_sb().table("sentiment_daily").select("*").eq("date", TODAY.isoformat()).execute().data
     name_of = {t["id"]: t["name"] for t in tickers}
 
-    payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
+    win_start, win_end = briefing_window()
+    payload = build_report_payload(
+        sigs, daily, name_of, TODAY.isoformat(),
+        covers={"from": win_start.isoformat(), "to": win_end.isoformat()})
     prompt = build_report_prompt(payload)
 
     # 생각을 끈 상태로 뽑는다. 두 가지 이유로 다시 시도할 수 있다.
