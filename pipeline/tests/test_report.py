@@ -185,7 +185,7 @@ def _responses(monkeypatch, seq):
     """_generate_text 가 seq 를 순서대로 돌려주거나 던지게 한다."""
     calls = []
 
-    def fake(model, prompt, max_tokens, disable_thinking=False):
+    def fake(model, prompt, max_tokens, disable_thinking=False, **kwargs):
         calls.append(disable_thinking)
         item = seq[len(calls) - 1]
         if isinstance(item, Exception):
@@ -209,6 +209,33 @@ def test_transient_excludes_client_errors_and_our_own():
     assert not P._is_transient(FakeAPIError(404, "not found"))
     # 잘림·빈 응답은 다시 불러도 같은 문제라 재시도 대상이 아니다(code 가 없다)
     assert not P._is_transient(RuntimeError("출력이 max_output_tokens=6000 에서 잘림"))
+
+
+# --- 타임아웃 ----------------------------------------------------------
+# 2026-09-21, 09-28 실행이 Gemini 호출에 매달려 러너 한도 6시간을 태웠다.
+# 타임아웃을 걸어 예외로 바꾸는 것만으로는 부족하고, 그 예외가 재시도 경로에
+# 올라타야 한다(code 가 없어서 기본 판정으로는 걸러진다).
+class FakeReadTimeout(Exception):
+    """httpx.ReadTimeout 처럼 이름에 Timeout 이 들어간 예외. code 는 없다."""
+
+
+def test_timeout_is_transient():
+    assert P._is_transient(FakeReadTimeout("timed out"))
+
+
+def test_timeout_detected_through_exception_chain():
+    # SDK 가 다른 예외로 감싸 올려도 원인 사슬을 따라가 찾아야 한다
+    try:
+        try:
+            raise FakeReadTimeout("timed out")
+        except FakeReadTimeout as inner:
+            raise RuntimeError("호출 실패") from inner
+    except RuntimeError as wrapped:
+        assert P._is_transient(wrapped)
+
+
+def test_non_timeout_runtime_error_still_not_transient():
+    assert not P._is_timeout(RuntimeError("빈 응답"))
 
 
 # --- 재시도 ------------------------------------------------------------

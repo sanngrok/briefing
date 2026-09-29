@@ -102,3 +102,51 @@ def test_thresholds_are_injectable():
     d = decide_signal(avg=THRESHOLD, baseline=0.0, news_count=2,
                       min_news=2, threshold=THRESHOLD)
     assert d is not None and d["type"] == "sentiment_surge_pos"
+
+
+# --- 브리핑 구간 (프리마켓 전환) ---------------------------------------
+# 아침에 내보내는 리포트는 '오늘 장'을 다룰 수 없다(아직 안 열렸다). 오늘 날짜로
+# 찍되 내용은 직전 세션 + 밤사이다. 구간이 겹치면 같은 기사가 오늘 평균과 기준선에
+# 동시에 들어가 delta 가 눌리므로, 서로 맞닿되 겹치지 않는지를 고정한다.
+from datetime import date as _date, timedelta as _td
+
+import pipeline as _P
+
+
+def test_previous_briefing_day_skips_weekend():
+    monday = _date(2026, 9, 28)
+    assert monday.weekday() == 0
+    assert _P.previous_briefing_day(monday) == _date(2026, 9, 25)   # 금요일
+
+
+def test_previous_briefing_day_is_yesterday_midweek():
+    tuesday = _date(2026, 9, 29)
+    assert _P.previous_briefing_day(tuesday) == _date(2026, 9, 28)
+
+
+def test_window_spans_one_day_midweek():
+    start, end = _P.briefing_window(_date(2026, 9, 29), cutoff_hour=7)
+    assert (end - start) == _td(days=1)
+    assert start.hour == 7 and end.hour == 7
+    assert start.tzinfo is not None                      # KST aware
+
+
+def test_monday_window_covers_friday_session_and_weekend():
+    start, end = _P.briefing_window(_date(2026, 9, 28), cutoff_hour=7)
+    assert (end - start) == _td(days=3)                  # 금 07:00 ~ 월 07:00
+    assert start.date() == _date(2026, 9, 25)
+
+
+def test_consecutive_windows_do_not_overlap():
+    # 화요일 구간의 시작 == 월요일 구간의 끝. 맞닿되 겹치지 않는다.
+    _, mon_end = _P.briefing_window(_date(2026, 9, 28), cutoff_hour=7)
+    tue_start, _ = _P.briefing_window(_date(2026, 9, 29), cutoff_hour=7)
+    assert mon_end == tue_start
+
+
+def test_window_end_does_not_depend_on_run_time():
+    # cron 이 5시간 밀려도 다루는 구간은 같아야 한다 — 실행 시각이 아니라
+    # 고정 기준 시각으로 자르기 때문이다.
+    first = _P.briefing_window(_date(2026, 9, 29), cutoff_hour=7)
+    second = _P.briefing_window(_date(2026, 9, 29), cutoff_hour=7)
+    assert first == second

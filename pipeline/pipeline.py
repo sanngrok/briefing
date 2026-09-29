@@ -26,7 +26,8 @@ import json
 import html
 import time
 import hashlib
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
+from zoneinfo import ZoneInfo
 
 # third-party(requests/supabase/anthropic/pykrx) 는 각 사용처에서 지연 import 한다.
 # 덕분에 시세만 검증(pykrx만 필요)하는 등 일부 단계만 독립 실행할 수 있다.
@@ -54,7 +55,39 @@ SENTIMENT_ATTEMPTS = 2      # 감정 분석 총 시도 횟수. 기사 수만큼 
 SENTIMENT_RETRY_SECONDS = 5 # 감정 분석 재시도 대기
 REPORT_RETRY_SECONDS = 15   # 지수 백오프(15 -> 30 -> 60 -> 120초, 합 225초)
 
-TODAY = date.today()
+# Gemini 호출 타임아웃(밀리초). google-genai 2.25 의 HttpOptions.timeout 은
+# 기본값이 None = 무제한이라, 응답이 오지 않으면 영원히 매달린다. 2026-09-21 과
+# 09-28 실행이 각각 러너 한도 6시간을 다 태우고 cancelled 로 끝난 원인이다.
+#
+# 매달림은 예외를 올리지 않기 때문에 아래 재시도 경로에도 걸리지 않는다 —
+# 재시도를 아무리 늘려도 손이 닿지 않는다. 시간을 잘라 예외로 바꿔야 비로소
+# 재시도가 시작된다.
+#
+# 값은 단계별로 다르게 잡는다. 감정분석은 기사 수만큼 도는 경로라(45건 × 2회)
+# 길게 잡으면 최악의 경우 워크플로 한도(timeout-minutes: 45)를 넘겨 버린다.
+# 감정분석은 짧은 JSON 이라 정상이면 수 초다. 20초면 넉넉하고, 전부 매달리는
+# 최악의 경우에도 45건 × 2회 × 20초 = 30분으로 워크플로 한도 안에 남는다.
+SENTIMENT_TIMEOUT_MS = 20_000
+# 리포트는 본문이 길어 느리고, 하루 한 번뿐이라 넉넉히 준다.
+REPORT_TIMEOUT_MS = 120_000
+
+# 날짜 기준은 한국 장이다. 예전에는 `date.today()` 로 러너 로컬(=UTC) 날짜를
+# 썼는데, 실행이 15:00 UTC 를 넘겨 밀리면 한국 날짜와 하루 어긋난다. 관측된
+# 최대 지연이 12.2시간이라 아직 터지지는 않았지만, 아침 실행으로 옮기면서
+# 기준을 명시한다.
+KST = ZoneInfo("Asia/Seoul")
+TODAY = datetime.now(KST).date()
+
+# 브리핑 기준 시각(KST). 이 시각을 경계로 하루치 구간을 자른다.
+#
+# 아침에 보는 리포트는 "오늘 장"을 다룰 수 없다 — 아직 열리지 않았다. 그래서
+# 오늘 날짜로 찍되 내용은 '직전 세션 마감 + 밤사이 뉴스'인 프리마켓 브리핑이다.
+#
+# 경계를 실제 실행 시각이 아니라 이 고정 시각으로 잡는 이유가 있다. GitHub cron 은
+# 중앙값 5시간 18분 밀리는데(최대 12.2시간), 실행 시각을 경계로 쓰면 리포트가
+# 다루는 구간이 그날 러너 사정에 따라 들쭉날쭉해진다. 고정해 두면 언제 돌든 같은
+# 구간을 다루고, 구간끼리 겹치거나 비지도 않는다.
+BRIEFING_CUTOFF_HOUR = 7
 
 # 외부 클라이언트는 지연(lazy) 생성한다.
 # 이렇게 하면 시세만 검증할 때(키 불필요)처럼 일부 단계만 import/실행할 수 있다.
@@ -92,6 +125,23 @@ def _finish_reason(resp):
 TRANSIENT_STATUS = {429, 500, 503, 504}
 
 
+def _is_timeout(err) -> bool:
+    """호출이 시간 안에 안 끝나서 잘린 것인지.
+
+    google-genai 는 내부적으로 httpx 를 쓰고, 타임아웃이면 httpx 예외가 그대로
+    올라온다(응답 자체가 없어 APIError 로 감싸이지 않는다). httpx 를 직접
+    의존성으로 선언하지 않았으므로 import 대신 예외 사슬의 타입 이름으로 본다.
+    """
+    seen = set()
+    e = err
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if "Timeout" in type(e).__name__:
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
 def _is_transient(err) -> bool:
     """재시도할 가치가 있는 일시적 오류인지.
 
@@ -102,8 +152,11 @@ def _is_transient(err) -> bool:
     google-genai 의 APIError 는 HTTP 상태를 `code` 로 들고 있다. 우리가 직접 올린
     RuntimeError(잘림·빈 응답)에는 code 가 없으므로 자연히 제외된다 — 그건 다시
     불러도 같은 이유로 실패할 종류의 오류가 아니라, 응답 내용의 문제다.
+
+    타임아웃도 여기 포함한다. 타임아웃 예외에는 code 가 없어서 넣어 주지 않으면
+    "잘라 놓고 재시도는 안 하는" 상태가 된다 — 매달림이 즉시 실패로 바뀔 뿐이다.
     """
-    return getattr(err, "code", None) in TRANSIENT_STATUS
+    return getattr(err, "code", None) in TRANSIENT_STATUS or _is_timeout(err)
 
 
 def _thinking_rejected(err) -> bool:
@@ -113,7 +166,8 @@ def _thinking_rejected(err) -> bool:
 
 
 def _generate_text(model: str, prompt: str, max_tokens: int,
-                   disable_thinking: bool = False) -> str:
+                   disable_thinking: bool = False,
+                   timeout_ms: int = REPORT_TIMEOUT_MS) -> str:
     """Gemini generate_content 호출 후 텍스트만 반환. (호출부 공통 헬퍼)
 
     Gemini 3.x 는 내부 '생각(thinking)' 토큰도 max_output_tokens 를 함께 소진한다.
@@ -126,6 +180,9 @@ def _generate_text(model: str, prompt: str, max_tokens: int,
       거부) 거부되면 설정 없이 한 번 더 시도한다.
     - finish_reason 이 MAX_TOKENS 면 잘린 응답이므로 예외로 올린다. 잘린 텍스트를
       호출부가 정상 응답으로 오인해 저장하는 일을 막는다.
+
+    `timeout_ms` 는 호출마다 건다(클라이언트 전역이 아니라). 감정분석은 기사 수만큼
+    도는 경로라 리포트보다 짧게 잡아야 하기 때문이다.
     """
     from google.genai import types
 
@@ -137,6 +194,7 @@ def _generate_text(model: str, prompt: str, max_tokens: int,
                 max_output_tokens=max_tokens,
                 thinking_config=(types.ThinkingConfig(thinking_budget=0)
                                  if thinking_off else None),
+                http_options=types.HttpOptions(timeout=timeout_ms),
             ),
         )
 
@@ -347,7 +405,8 @@ def enrich_news(items):
         for attempt in range(1, SENTIMENT_ATTEMPTS + 1):
             try:
                 # thinking 토큰이 한도를 나눠 쓰므로 짧은 JSON 이어도 여유를 둔다
-                text = _generate_text(CHEAP_MODEL, prompt, max_tokens=1000)
+                text = _generate_text(CHEAP_MODEL, prompt, max_tokens=1000,
+                                      timeout_ms=SENTIMENT_TIMEOUT_MS)
                 data = parse_sentiment(text)
                 break
             except Exception as e:
@@ -415,12 +474,45 @@ def decide_signal(avg, baseline, news_count, *, min_news=MIN_NEWS, threshold=THR
     return {"type": stype, "severity": classify_severity(abs(delta)), "delta": delta}
 
 
+def previous_briefing_day(d: date) -> date:
+    """직전 브리핑이 돌았을 날. 주말은 건너뛴다(cron 이 월~금이므로).
+
+    월요일 아침 브리핑의 직전 브리핑은 금요일 아침이다. 그래서 월요일 구간은
+    금요일 07:00 ~ 월요일 07:00 의 72시간이 되고, 금요일 장과 주말 뉴스를 함께
+    담는다. 금요일 장은 금요일 아침 브리핑(목요일 장을 다룬다)에는 들어가지
+    않았으므로 중복이 아니다.
+    """
+    prev = d - timedelta(days=1)
+    while prev.weekday() >= 5:      # 5=토, 6=일
+        prev -= timedelta(days=1)
+    return prev
+
+
+def briefing_window(today: date = None, cutoff_hour: int = None):
+    """이 브리핑이 다루는 뉴스 구간 [start, end). KST 기준 aware datetime. (순수 함수)
+
+    직전 브리핑 시점부터 오늘 브리핑 시점까지다. 구간이 서로 겹치지 않으므로
+    같은 기사가 두 날의 집계에 들어가지 않는다 — 겹치면 오늘 평균과 기준선이
+    같은 기사를 공유해 delta 가 눌린다.
+    """
+    today = today or TODAY
+    cutoff_hour = BRIEFING_CUTOFF_HOUR if cutoff_hour is None else cutoff_hour
+    end = datetime.combine(today, dtime(cutoff_hour), tzinfo=KST)
+    start = datetime.combine(previous_briefing_day(today), dtime(cutoff_hour), tzinfo=KST)
+    return start, end
+
+
 def aggregate_and_signal(tickers):
+    # 이 브리핑이 다루는 구간. 아침 실행이라 '오늘 0시부터'로는 잡히는 기사가
+    # 거의 없다 — 직전 세션과 밤사이를 함께 봐야 한다.
+    win_start, win_end = briefing_window()
+    print(f"[aggregate] 구간 {win_start.isoformat()} ~ {win_end.isoformat()}")
     for t in tickers:
-        # 오늘 뉴스 감정 모으기
+        # 이 구간의 뉴스 감정 모으기
         today_news = get_sb().table("news").select("id,sentiment") \
             .eq("ticker_id", t["id"]) \
-            .gte("published_at", TODAY.isoformat()) \
+            .gte("published_at", win_start.isoformat()) \
+            .lt("published_at", win_end.isoformat()) \
             .execute().data
         sents = [n["sentiment"] for n in (today_news or []) if n["sentiment"] is not None]
         if not sents:
@@ -516,15 +608,19 @@ def round_numbers(value, ndigits: int = 3):
     return value
 
 
-def build_report_payload(signals_rows, daily_rows, name_of, report_date):
+def build_report_payload(signals_rows, daily_rows, name_of, report_date, covers=None):
     """리포트 LLM 에 넘길 근거 payload. 조회된 실제 행만으로 구성한다(그라운딩). (순수 함수)
 
     - signals: evidence(jsonb) 를 펼쳐 delta/avg/baseline/news_count 등을 노출.
     - sentiment: 종목별 일집계.
+    - covers: 이 리포트가 다루는 뉴스 구간(표시용). 아침 브리핑은 오늘 날짜로
+      찍히지만 내용은 직전 세션이라, 본문이 "오늘 장"을 말하지 않도록 구간을
+      근거에 실어 준다.
     - 데이터에 없는 값은 만들지 않는다.
     """
     return round_numbers({
         "date": report_date,
+        **({"covers": covers} if covers else {}),
         "signals": [
             {"name": name_of.get(s["ticker_id"]), "type": s["type"],
              "severity": s["severity"], **(s.get("evidence") or {})}
@@ -546,7 +642,11 @@ def build_report_prompt(payload):
         "규칙:\n"
         "- 데이터에 없는 수치·전망·목표가·투자의견은 절대 쓰지 마라.\n"
         "- 각 언급 끝에 근거가 된 종목명을 괄호로 표기하라.\n"
-        "- 발화된 시그널이 없으면 '오늘은 감정 급변 시그널이 없습니다'라고 명시하라.\n"
+        "- 발화된 시그널이 없으면 '감정 급변 시그널이 없습니다'라고 명시하라.\n"
+        # 아침에 내보내는 프리마켓 브리핑이라 '오늘 장'은 아직 열리지 않았다.
+        # covers 구간을 무시하고 오늘 장을 논평하면 없는 사실을 지어내는 것이다.
+        "- covers 는 이 브리핑이 다루는 뉴스 구간이다. 그 구간을 벗어난 시점의 "
+        "장세·등락을 논평하지 마라.\n"
         "- 매수/매도 등 투자 권유 표현을 쓰지 마라.\n"
         "- 검토 과정·자기점검 메모를 쓰지 말고 리포트 본문만 출력하라.\n"
         f"- 리포트는 `{REPORT_HEADING}` 제목으로 시작하라.\n\n"
@@ -560,7 +660,10 @@ def build_report(tickers):
     daily = get_sb().table("sentiment_daily").select("*").eq("date", TODAY.isoformat()).execute().data
     name_of = {t["id"]: t["name"] for t in tickers}
 
-    payload = build_report_payload(sigs, daily, name_of, TODAY.isoformat())
+    win_start, win_end = briefing_window()
+    payload = build_report_payload(
+        sigs, daily, name_of, TODAY.isoformat(),
+        covers={"from": win_start.isoformat(), "to": win_end.isoformat()})
     prompt = build_report_prompt(payload)
 
     # 생각을 끈 상태로 뽑는다. 두 가지 이유로 다시 시도할 수 있다.
@@ -573,7 +676,8 @@ def build_report(tickers):
         try:
             candidate = strip_markdown_fence(
                 _generate_text(REPORT_MODEL, prompt, max_tokens=6000,
-                               disable_thinking=True))
+                               disable_thinking=True,
+                               timeout_ms=REPORT_TIMEOUT_MS))
         except Exception as e:
             if not _is_transient(e) or attempt == REPORT_ATTEMPTS:
                 raise

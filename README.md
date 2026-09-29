@@ -31,7 +31,7 @@
 
 | 레이어 | 위치 | 주소 |
 |---|---|---|
-| A. 파이프라인 | GitHub Actions | `.github/workflows/pipeline.yml` (평일 16:00 KST) |
+| A. 파이프라인 | GitHub Actions | `.github/workflows/pipeline.yml` (평일 07:00 KST, 프리마켓 브리핑) |
 | B. 서빙 API | Render | https://briefing-6pzj.onrender.com ([/docs](https://briefing-6pzj.onrender.com/docs)) |
 | C. 프론트엔드 | Vercel | https://briefing-lake.vercel.app |
 
@@ -339,9 +339,37 @@ PORTFOLIO_ALIAS_OVERRIDES = {
 
 [.github/workflows/pipeline.yml](.github/workflows/pipeline.yml) 이 파이프라인을 실행합니다.
 
-- **스케줄**: `cron: '0 7 * * 1-5'` = 07:00 UTC = **16:00 KST 평일**.
-- **수동 실행**: Actions 탭 → `daily-pipeline` → *Run workflow* (`workflow_dispatch`).
-- **중복 방지**: `concurrency` 로 스케줄/수동이 겹쳐도 동시에 두 번 돌지 않음(멱등 안전).
+- **주 트리거**: 외부 스케줄러가 평일 07:00 KST 에 `workflow_dispatch` 를 호출 (아래 참조).
+- **그물**: `cron: '0 22 * * 0-4'` = 22:00 UTC = **다음 날 07:00 KST**. 외부 스케줄러가
+  죽었을 때 늦게라도 그날 리포트가 남게 하는 용도입니다.
+- **수동 실행**: Actions 탭 → `daily-pipeline` → *Run workflow*.
+- **중복 방지**: `concurrency` 로 스케줄/외부/수동이 겹쳐도 동시에 두 번 돌지 않음(멱등 안전).
+
+리포트는 **오늘 날짜로 찍히되 내용은 직전 세션 마감 + 밤사이 뉴스**입니다(프리마켓
+브리핑). 아침엔 당일 장이 아직 열리지 않았기 때문입니다. 다루는 구간은 실행 시각이
+아니라 `pipeline.py` 의 `BRIEFING_CUTOFF_HOUR`(07:00 KST)로 자르므로, cron 이 밀려도
+같은 구간을 다룹니다.
+
+#### 왜 외부 스케줄러인가
+
+GitHub 의 `schedule` 이벤트는 이 레포에서 **실측 중앙값 5시간 18분**(최소 38분, 최대
+12.2시간) 밀립니다. 07:00 KST 에 예약해도 정오에 도는 일이 생겨 아침 리포트의
+트리거로 쓸 수 없습니다. 그래서 정시성이 필요한 호출만 밖으로 뺍니다.
+
+cron-job.org · UptimeRobot 등 무료 스케줄러에서 평일 07:00 KST 에 아래를 호출하세요.
+
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github+json" \
+  -H "Authorization: Bearer $GH_PAT" \
+  -H "X-GitHub-Api-Version: 2022-11-28" \
+  https://api.github.com/repos/sanngrok/briefing/actions/workflows/pipeline.yml/dispatches \
+  -d '{"ref":"main"}'
+```
+
+`GH_PAT` 은 fine-grained personal access token 이며, 이 레포에 대한
+**Actions: Read and write** 권한만 있으면 됩니다(다른 권한은 주지 마세요).
+성공하면 HTTP 204 가 돌아오고 본문은 비어 있습니다.
 
 **필요한 repo Secrets** (Settings → Secrets and variables → Actions):
 `SUPABASE_URL`, `SUPABASE_KEY`(service_role), `GEMINI_API_KEY`,
