@@ -26,10 +26,12 @@ class FakeModels:
         self._responses = list(responses)
         self._reject_thinking = reject_thinking
         self.calls = []            # (thinking 을 껐는지) 기록
+        self.configs = []          # 넘어온 config 원본(타임아웃 검증용)
 
     def generate_content(self, *, model, contents, config):
         thinking_off = getattr(config, "thinking_config", None) is not None
         self.calls.append(thinking_off)
+        self.configs.append(config)
         if thinking_off and self._reject_thinking:
             raise RuntimeError("400 INVALID_ARGUMENT: thinking_budget is not supported")
         return self._responses.pop(0)
@@ -58,6 +60,30 @@ def test_disable_thinking_passes_thinking_config(fake_ai):
     models = fake_ai([FakeResp("본문")])
     pipeline._generate_text("m", "p", max_tokens=100, disable_thinking=True)
     assert models.calls == [True]
+
+
+# --- 타임아웃 -------------------------------------------------------
+# google-genai 의 HttpOptions.timeout 기본값은 None(무제한)이다. 값을 실어
+# 보내지 않으면 응답이 안 올 때 영원히 매달린다 — 2026-09-21, 09-28 실행이
+# 그렇게 러너 한도 6시간을 태웠다. 호출마다 실제로 실리는지 고정한다.
+def test_passes_timeout_to_call(fake_ai):
+    models = fake_ai([FakeResp("본문")])
+    pipeline._generate_text("m", "p", max_tokens=100, timeout_ms=12_345)
+    assert models.configs[0].http_options.timeout == 12_345
+
+
+def test_defaults_to_report_timeout(fake_ai):
+    models = fake_ai([FakeResp("본문")])
+    pipeline._generate_text("m", "p", max_tokens=100)
+    assert models.configs[0].http_options.timeout == pipeline.REPORT_TIMEOUT_MS
+
+
+def test_thinking_retry_keeps_timeout(fake_ai):
+    """thinking 거부로 다시 부를 때도 타임아웃이 빠지면 안 된다."""
+    models = fake_ai([FakeResp("본문")], reject_thinking=True)
+    pipeline._generate_text("m", "p", max_tokens=100,
+                            disable_thinking=True, timeout_ms=9_000)
+    assert [c.http_options.timeout for c in models.configs] == [9_000, 9_000]
 
 
 def test_thinking_left_on_by_default(fake_ai):
@@ -141,7 +167,7 @@ def test_sentiment_retries_transient_then_succeeds(monkeypatch):
     saved, slept = _enrich_env(monkeypatch)
     calls = []
 
-    def fake(model, prompt, max_tokens, disable_thinking=False):
+    def fake(model, prompt, max_tokens, disable_thinking=False, **kwargs):
         calls.append(1)
         if len(calls) == 1:
             raise FakeAPIError(503, "high demand")
