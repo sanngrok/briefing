@@ -41,6 +41,11 @@ jobs:
       run:
         working-directory: pipeline
     steps:
+      # checkout 을 먼저 한다. 가드를 앞에 두면 잡 기본 working-directory 인
+      # pipeline/ 이 아직 없어서 . 로 덮어야 하는데, 그 경로는 schedule 이벤트로만
+      # 밟혀 돌려보기 전에는 확인할 수 없다. checkout 은 몇 초라 먼저 치르는 게 싸다.
+      - uses: actions/checkout@v4
+
       # 그물 cron 전용 가드. schedule 로 들어온 실행만 본다 — 사람이 직접 돌리거나
       # 외부 스케줄러가 부른 workflow_dispatch 는 언제나 그대로 실행한다(리포트를
       # 다시 만들고 싶을 때 막히면 곤란하다).
@@ -50,7 +55,6 @@ jobs:
       - name: 오늘 리포트가 이미 있는지 확인 (schedule 한정)
         id: guard
         if: github.event_name == 'schedule'
-        working-directory: .
         run: |
           TODAY=$(TZ=Asia/Seoul date +%F)
           # Render 무료 인스턴스는 슬립에서 깨는 데 30~60초 걸린다.
@@ -64,9 +68,6 @@ jobs:
             echo "없거나 판정 불가. 그물이 돈다."
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - uses: actions/checkout@v4
-        if: steps.guard.outputs.skip != 'true'
 
       - uses: actions/setup-python@v5
         if: steps.guard.outputs.skip != 'true'
