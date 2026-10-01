@@ -32,6 +32,10 @@ build/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 
+# Playwright MCP 가 남기는 방문 페이지 스냅샷·콘솔 로그.
+# 외부 사이트(뉴스 기사 등)를 열면 그쪽 광고 스크립트 로그까지 통째로 쌓인다.
+.playwright-mcp/
+
 # --- OS / Editor ---
 .DS_Store
 Thumbs.db
