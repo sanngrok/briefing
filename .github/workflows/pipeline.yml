@@ -7,13 +7,19 @@ name: daily-pipeline
 #
 # 정시성은 외부 스케줄러가 workflow_dispatch 를 찔러서 확보한다. GitHub 의
 # schedule 은 이 레포에서 실측 중앙값 5시간 18분(최대 12.2시간) 밀려서 아침
-# 리포트의 트리거로 쓸 수 없다. 아래 cron 은 외부 스케줄러가 죽었을 때를 위한
-# 그물일 뿐이다 — 늦게라도 그날 리포트는 남는다.
+# 리포트의 트리거로 쓸 수 없다.
 #
-# cron 은 UTC 기준: '0 22 * * 0-4' = 22:00 UTC = 다음 날 07:00 KST, 월~금 아침.
+# 아래 cron 은 외부 스케줄러가 죽었을 때를 위한 그물이다. 그래서 schedule 로 들어온
+# 실행은 "오늘 리포트가 아직 없을 때만" 파이프라인을 돌린다(아래 guard 스텝).
+# 조건 없이 돌리면 아침에 이미 만든 리포트를 같은 구간으로 다시 만들어 Gemini
+# 쿼터만 두 번 쓴다 — 2026-10-01 에 실제로 그랬다.
+#
+# cron 은 UTC 기준: '0 2 * * 1-5' = 02:00 UTC = 11:00 KST.
+# 지연이 0이어도 외부 스케줄러(07:00 KST)보다 뒤고, 최대 12시간 밀려도 23:00 KST 라
+# 같은 한국 날짜 안에 머문다 — 그물이 엉뚱한 날짜의 리포트를 만들지 않는다.
 on:
   schedule:
-    - cron: '0 22 * * 0-4'
+    - cron: '0 2 * * 1-5'
   workflow_dispatch: {}   # 외부 스케줄러 + 수동 실행
 
 # 스케줄과 수동 실행이 겹쳐도 동시에 두 번 돌지 않게(멱등 안전).
@@ -35,18 +41,46 @@ jobs:
       run:
         working-directory: pipeline
     steps:
+      # 그물 cron 전용 가드. schedule 로 들어온 실행만 본다 — 사람이 직접 돌리거나
+      # 외부 스케줄러가 부른 workflow_dispatch 는 언제나 그대로 실행한다(리포트를
+      # 다시 만들고 싶을 때 막히면 곤란하다).
+      #
+      # 판정을 못 하면(API 가 자고 있거나 5xx) 건너뛰지 않고 실행한다. 중복
+      # 리포트는 쿼터를 더 쓸 뿐이지만, 건너뛴 날은 브리핑 자체가 없다.
+      - name: 오늘 리포트가 이미 있는지 확인 (schedule 한정)
+        id: guard
+        if: github.event_name == 'schedule'
+        working-directory: .
+        run: |
+          TODAY=$(TZ=Asia/Seoul date +%F)
+          # Render 무료 인스턴스는 슬립에서 깨는 데 30~60초 걸린다.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 \
+                 "https://briefing-6pzj.onrender.com/api/reports/$TODAY") || CODE="000"
+          echo "$TODAY 리포트 조회 -> HTTP $CODE"
+          if [ "$CODE" = "200" ]; then
+            echo "이미 있다. 그물은 돌지 않는다."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "없거나 판정 불가. 그물이 돈다."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.skip != 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip != 'true'
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: pipeline/requirements.txt
 
       - name: Install dependencies
+        if: steps.guard.outputs.skip != 'true'
         run: pip install -r requirements.txt
 
       - name: Run pipeline
+        if: steps.guard.outputs.skip != 'true'
         env:
           # 버퍼링을 끄지 않으면 파이썬이 출력을 모았다가 종료 시점에 한꺼번에
           # 내보낸다. 매달려서 강제 종료되면 로그가 통째로 비어 어느 단계에서
