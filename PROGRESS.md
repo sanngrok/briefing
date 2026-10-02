@@ -1,7 +1,7 @@
 # 진행 상황 정리 (PROGRESS)
 
 > 금융/트렌드 AI 시그널 리포트 플랫폼 — 국내 주식 뉴스 감정 급변 시그널 대시보드
-> 최종 업데이트: 2026-10-01 · 리모트: `github.com/sanngrok/briefing` (main)
+> 최종 업데이트: 2026-10-02 · 리모트: `github.com/sanngrok/briefing` (main)
 
 ---
 
@@ -11,7 +11,8 @@
 - **운영 주소**:
   - 프론트: https://briefing-lake.vercel.app
   - API: https://briefing-6pzj.onrender.com
-  - 파이프라인: GitHub Actions cron (평일 16:00 KST)
+  - 파이프라인: 평일 **07:00 KST** 아침 프리마켓 브리핑. 주 트리거는 외부 스케줄러의
+    `workflow_dispatch`(아직 미설정 — README §자동화), 그물은 Actions cron 11:00 KST.
 - **LLM**: Anthropic → **Google Gemini 무료 티어**로 전환 (`gemini-3.5-flash` / `-flash-lite`).
 - **테스트**: 파이프라인 99개 + API 82개 + 프론트 62개(vitest) + 증권사 동기화 20개 — 합 263개, 모두 키 없이 통과.
 - **시그널**: 2026-09-21 실행에서 **5건 발화 확인** (아래 §5-A). 기준선이 쌓여 규칙이 실제로 동작한다.
@@ -21,7 +22,7 @@
 ## 2. 아키텍처 (읽기/쓰기 2-레이어 분리)
 
 ```
-[레이어 A] GitHub Actions cron (평일 16:00 KST)
+[레이어 A] GitHub Actions (평일 07:00 KST 외부 dispatch · cron 11:00 KST 그물)
    시세·뉴스 수집 → LLM 감정/태그 → 감정 집계 → 급변 시그널 → LLM 리포트
         │ write
         ▼
@@ -77,7 +78,7 @@ briefing/
 | M5 | 리포트 (그라운딩) | ✅ | `build_report_payload/prompt` + 면책 라벨 + 테스트 7 |
 | M6 | FastAPI 서빙 레이어 | ✅ | 엔드포인트 4종 + Pydantic 모델 + 테스트 13 |
 | M7 | 프론트엔드 (Recharts) | ✅ | 대시보드, npm build 통과 |
-| M8 | GitHub Actions 워크플로우 | ✅ | `pipeline.yml`(cron 16:00 KST + 수동) |
+| M8 | GitHub Actions 워크플로우 | ✅ | `pipeline.yml`(외부 dispatch 07:00 KST + cron 11:00 KST 그물 + 수동) |
 | — | UI 리디자인 (옵션 A) | ✅ | 요약 우선 KPI 대시보드, 라이트/다크 지원 |
 | **M9** | **배포** | ✅ | Render(API) + Vercel(프론트) + Actions Secrets 등록·실행 검증 |
 | **M10** | **내 포트폴리오** | ✅ | 보유 종목 CRUD + 평가손익·수익률·비중 + `/api/quotes` + vitest 30 |
@@ -368,6 +369,11 @@ GitHub `schedule` 은 이 레포에서 실측 중앙값 5시간 18분(최대 12.
 스케줄러(cron-job.org 등)가 `workflow_dispatch` 를 찌르는 것을 주 경로로 두고,
 cron 은 `'0 22 * * 0-4'`(= 다음 날 07:00 KST) 그물로만 남겼다. 설정 절차는 README
 §자동화 에 적었다.
+
+> 이후 변경(2026-10-01): 그물 cron 은 `'0 2 * * 1-5'`(= 11:00 KST)로 옮기고 **조건부**로
+> 바꿨다. `schedule` 로 들어온 실행은 그날 리포트가 없을 때만 돈다 — 아침에 만든 리포트를
+> 같은 구간으로 다시 만들어 Gemini 쿼터를 두 번 쓰는 일이 2026-10-01 에 실제로 났다.
+> 현재 값은 언제나 `pipeline.yml` 과 README §자동화 가 기준이다.
 
 테스트: 파이프라인 93 -> 99개.
 
