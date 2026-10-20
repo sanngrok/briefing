@@ -46,6 +46,21 @@ NEWS_PER_TICKER = 10     # 종목당 수집할 뉴스 개수
 PRICE_LOOKBACK_DAYS = 10 # 주말/공휴일 대비: 최근 영업일을 찾기 위한 조회 범위
 CHEAP_MODEL   = "gemini-3.5-flash-lite"   # 감정/태그용 (무료 티어)
 REPORT_MODEL  = "gemini-3.5-flash"        # 리포트용 (무료 티어)
+# 리포트 폴백. 2026-10-14 07:00 ~ 10-15 16:00 KST(약 33시간) 동안 REPORT_MODEL 이
+# 503 'high demand' 만 뱉어 리포트가 이틀 통째로 없었다. 같은 키·같은 실행 안에서
+# flash-lite 는 그 내내 멀쩡했다(10-15 하루 184건 처리, 429·503 0건) — 장애는
+# 계정이 아니라 모델 하나에 묶여 있었다.
+#
+# 무료 티어 일일 한도는 모델별로 센다(429 본문의 quotaDimensions 에 모델명이 박혀
+# 있다). 그래서 모델을 바꾸면 쓰지 않은 버킷이 하나 더 생긴다 — REPORT_MODEL 은
+# 20회/일인데, 그 20회를 503 재시도로 다 태운 뒤에도 폴백은 남아 있다.
+#
+# 품질은 본래 모델보다 떨어질 수 있다. is_valid_report 는 '# 로 시작 + 80자'만
+# 보므로 부실한 본문도 통과한다. 그래도 리포트가 아예 없는 것보다는 낫다는 판단이고,
+# 이 경로는 본래 모델이 다 실패한 날에만 탄다.
+REPORT_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+# 시도 순서. 앞에서부터 쓰고, 하나가 리포트를 못 내면 다음으로 넘어간다.
+REPORT_MODELS = (REPORT_MODEL, REPORT_FALLBACK_MODEL)
 SENTIMENT_CALL_INTERVAL = 4.5  # 초. 무료 티어 분당 15회 제한 대응(호출 간 최소 간격)
 # 최근 다섯 번 중 두 번이 리포트 단계의 503 만으로 죽었다. 4회/70초로는 무료 티어의
 # 지속형 과부하를 못 넘긴다(2026-09-28 실행이 10·20·40초를 다 쓰고도 실패).
@@ -160,7 +175,20 @@ def _is_transient(err) -> bool:
 
 
 def _thinking_rejected(err) -> bool:
-    """모델이 thinking_config 자체를 거부했는지(flash-lite 는 budget=0 을 400 으로 거부)."""
+    """모델이 thinking_config 자체를 거부했는지(flash-lite 는 budget=0 을 400 으로 거부).
+
+    메시지에 'thinking'/'budget' 이 들어오리라 기대했지만, 실측해 보니 flash-lite 는
+    근거를 밝히지 않는다 — 2026-10-18 에 직접 호출해 받은 본문은 통째로
+    `400 INVALID_ARGUMENT. Request contains an invalid argument.` 뿐이었다.
+    단어로만 판정하면 여기서 False 가 나와 설정 없이 다시 시도하는 길이 막히고,
+    400 은 비일시적이라 리포트가 그대로 죽는다.
+
+    그래서 400 자체를 신호로 본다. 이 경로는 호출부가 disable_thinking=True 로
+    불렀을 때만 열리므로, 오판해도 설정 없는 호출 한 번을 더 쓸 뿐이다. 그 호출이
+    진짜 잘못된 요청이었다면 거기서 다시 400 이 나 그대로 올라간다.
+    """
+    if getattr(err, "code", None) == 400:
+        return True
     msg = str(err).lower()
     return "thinking" in msg or "budget" in msg
 
@@ -654,6 +682,67 @@ def build_report_prompt(payload):
     )
 
 
+def _try_report_model(model, prompt):
+    """한 모델로 리포트 본문을 받아낸다. (본문 또는 None, 마지막 일시적 오류 또는 None).
+
+    생각을 끈 상태로 뽑는다. 두 가지 이유로 같은 모델에 다시 시도한다.
+      - 503 과부하: 지수 백오프 후 재시도.
+      - 리포트 형태가 아닌 응답: 바로 재시도(같은 프롬프트, 확률적 현상이므로).
+
+    429(일일 한도 소진)는 예외다. 재시도 대상이 아니라 '이 모델은 오늘 끝났다'는
+    신호라서 기다리지 않고 바로 넘긴다 — 2026-10-15 실행이 `Please retry in
+    22h8m41s` 를 받고도 15·30·60·120초 백오프를 돌며 세 번을 더 헛쳤다. 그 대기는
+    어떤 경우에도 한도를 되돌리지 못한다.
+
+    비일시적 오류(400 등)는 모델을 바꿔도 같은 이유로 실패할 종류라 그대로 올린다.
+    """
+    for attempt in range(1, REPORT_ATTEMPTS + 1):
+        try:
+            candidate = strip_markdown_fence(
+                _generate_text(model, prompt, max_tokens=6000,
+                               disable_thinking=True,
+                               timeout_ms=REPORT_TIMEOUT_MS))
+        except Exception as e:
+            if not _is_transient(e):
+                raise
+            if getattr(e, "code", None) == 429:
+                print(f"[report] {model} 일일 한도 소진(429) — 기다리지 않고 넘어간다: {e}")
+                return None, e
+            if attempt == REPORT_ATTEMPTS:
+                return None, e
+            wait = REPORT_RETRY_SECONDS * (2 ** (attempt - 1))
+            print(f"[report] {model} 일시적 오류({getattr(e, 'code', '?')}), {wait}초 뒤 "
+                  f"재시도 ({attempt}/{REPORT_ATTEMPTS}): {e}")
+            time.sleep(wait)
+            continue
+        if is_valid_report(candidate):
+            return candidate, None
+        print(f"[report] {model} 리포트 형태가 아닌 응답(시도 {attempt}): "
+              f"{candidate.strip()[:120]!r}")
+    return None, None
+
+
+def generate_report_text(prompt):
+    """REPORT_MODELS 를 순서대로 시도해 (본문, 쓰인 모델) 을 돌려준다.
+
+    앞 모델이 제 몫의 시도를 다 쓰고도 리포트를 못 내면 다음 모델로 넘어간다.
+    모두 실패하면 저장하지 않고 예외로 올린다 — 쓸 수 없는 본문으로 전날 리포트를
+    덮어쓰는 것보다, 잡이 실패해서 눈에 띄는 쪽이 낫다.
+    """
+    last_error = None
+    for idx, model in enumerate(REPORT_MODELS):
+        if idx > 0:
+            print(f"[report] 폴백 모델로 전환: {model}")
+        text, err = _try_report_model(model, prompt)
+        if text is not None:
+            return text, model
+        if err is not None:
+            last_error = err
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("리포트 형태의 응답을 받지 못했다 — 저장하지 않고 중단한다")
+
+
 def build_report(tickers):
     """오늘 시그널 + 종목별 감정 집계만 근거로 리포트 생성."""
     sigs = get_sb().table("signals").select("*").eq("date", TODAY.isoformat()).execute().data
@@ -666,42 +755,18 @@ def build_report(tickers):
         covers={"from": win_start.isoformat(), "to": win_end.isoformat()})
     prompt = build_report_prompt(payload)
 
-    # 생각을 끈 상태로 뽑는다. 두 가지 이유로 다시 시도할 수 있다.
-    #  - 일시적 오류(503 과부하·429 레이트리밋): 지수 백오프 후 재시도.
-    #  - 리포트 형태가 아닌 응답: 바로 재시도(같은 프롬프트, 확률적 현상이므로).
-    # 모두 소진하면 저장하지 않고 예외로 올린다 — 쓸 수 없는 본문으로 전날 리포트를
-    # 덮어쓰는 것보다, 잡이 실패해서 눈에 띄는 쪽이 낫다.
-    text = None
-    for attempt in range(1, REPORT_ATTEMPTS + 1):
-        try:
-            candidate = strip_markdown_fence(
-                _generate_text(REPORT_MODEL, prompt, max_tokens=6000,
-                               disable_thinking=True,
-                               timeout_ms=REPORT_TIMEOUT_MS))
-        except Exception as e:
-            if not _is_transient(e) or attempt == REPORT_ATTEMPTS:
-                raise
-            wait = REPORT_RETRY_SECONDS * (2 ** (attempt - 1))
-            print(f"[report] 일시적 오류({getattr(e, 'code', '?')}), {wait}초 뒤 "
-                  f"재시도 ({attempt}/{REPORT_ATTEMPTS}): {e}")
-            time.sleep(wait)
-            continue
-        if is_valid_report(candidate):
-            text = candidate
-            break
-        print(f"[report] 리포트 형태가 아닌 응답(시도 {attempt}): "
-              f"{candidate.strip()[:120]!r}")
-    if text is None:
-        raise RuntimeError("리포트 형태의 응답을 받지 못했다 — 저장하지 않고 중단한다")
+    text, used_model = generate_report_text(prompt)
 
     # §2 면책 라벨을 결정론적으로 부착
     body = text.rstrip() + "\n\n" + REPORT_DISCLAIMER
     get_sb().table("reports").upsert({
         "date": TODAY.isoformat(), "scope": "market", "body_md": body,
-        "model": REPORT_MODEL,
+        # 실제로 본문을 만든 모델을 적는다. 폴백이 걸린 날을 나중에 구분하려면
+        # REPORT_MODEL 상수가 아니라 쓰인 모델이 남아야 한다.
+        "model": used_model,
         "source_refs": [s["id"] for s in (sigs or [])],
     }, on_conflict="date,scope").execute()
-    print("[report] 생성 완료")
+    print(f"[report] 생성 완료 (model={used_model})")
 
 
 # ======================================================================
