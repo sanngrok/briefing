@@ -123,6 +123,41 @@ def test_falls_back_when_model_rejects_thinking_config(fake_ai):
     assert models.calls == [True, False]     # 끄고 시도 -> 거부 -> 설정 없이 재시도
 
 
+def test_falls_back_when_rejection_message_says_nothing(fake_ai):
+    """flash-lite 는 거부 이유를 밝히지 않는다. 2026-10-18 실측 본문은 통째로
+    `400 INVALID_ARGUMENT. Request contains an invalid argument.` 뿐이었다 —
+    'thinking'/'budget' 단어로만 판정하면 여기서 막혀 리포트가 400 으로 죽는다."""
+    models = fake_ai([FakeResp("본문")])
+    bare = type("ClientError", (Exception,), {})("400 INVALID_ARGUMENT. "
+                                                 "Request contains an invalid argument.")
+    bare.code = 400
+    sent = []
+
+    def boom(*, model, contents, config):
+        thinking_off = getattr(config, "thinking_config", None) is not None
+        sent.append(thinking_off)
+        if thinking_off:
+            raise bare
+        return FakeResp("본문")
+
+    models.generate_content = boom
+    assert pipeline._generate_text("m", "p", max_tokens=100,
+                                   disable_thinking=True) == "본문"
+    assert sent == [True, False]             # 끄고 시도 -> 맨 400 -> 설정 없이 재시도
+
+
+def test_bare_400_counts_as_thinking_rejection():
+    err = type("ClientError", (Exception,), {})("Request contains an invalid argument.")
+    err.code = 400
+    assert pipeline._thinking_rejected(err)
+
+
+def test_non_400_without_keywords_is_not_thinking_rejection():
+    err = type("ClientError", (Exception,), {})("Request failed.")
+    err.code = 503
+    assert not pipeline._thinking_rejected(err)
+
+
 def test_other_errors_are_not_retried(fake_ai):
     models = fake_ai([FakeResp("본문")])
 

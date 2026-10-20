@@ -181,12 +181,17 @@ class FakeAPIError(Exception):
 GOOD = "## 오늘의 뉴스 감정 브리핑\n\n오늘은 감정 급변 시그널이 없습니다. " + "근거 " * 30
 
 
-def _responses(monkeypatch, seq):
-    """_generate_text 가 seq 를 순서대로 돌려주거나 던지게 한다."""
+def _responses(monkeypatch, seq, models=None):
+    """_generate_text 가 seq 를 순서대로 돌려주거나 던지게 한다.
+
+    models 에 리스트를 넘기면 호출된 모델명을 순서대로 채워 준다(폴백 검증용).
+    """
     calls = []
 
     def fake(model, prompt, max_tokens, disable_thinking=False, **kwargs):
         calls.append(disable_thinking)
+        if models is not None:
+            models.append(model)
         item = seq[len(calls) - 1]
         if isinstance(item, Exception):
             raise item
@@ -257,7 +262,9 @@ def test_report_backoff_is_exponential(report_env, monkeypatch):
 
 def test_report_gives_up_after_all_attempts_without_saving(report_env, monkeypatch):
     saved, slept = report_env
-    _responses(monkeypatch, [FakeAPIError(503, "x")] * P.REPORT_ATTEMPTS)
+    # 사슬의 모든 모델이 제 몫을 다 쓰고 실패해야 포기한다
+    budget = P.REPORT_ATTEMPTS * len(P.REPORT_MODELS)
+    _responses(monkeypatch, [FakeAPIError(503, "x")] * budget)
     with pytest.raises(FakeAPIError):
         P.build_report([])
     assert saved == []                              # 전날 리포트를 덮어쓰지 않는다
@@ -281,7 +288,8 @@ def test_report_retries_malformed_output_then_saves(report_env, monkeypatch):
 
 def test_report_never_saves_malformed_output(report_env, monkeypatch):
     saved, _ = report_env
-    _responses(monkeypatch, ["  Let's double check the rules."] * P.REPORT_ATTEMPTS)
+    budget = P.REPORT_ATTEMPTS * len(P.REPORT_MODELS)
+    _responses(monkeypatch, ["  Let's double check the rules."] * budget)
     with pytest.raises(RuntimeError, match="리포트 형태"):
         P.build_report([])
     assert saved == []
@@ -291,6 +299,84 @@ def test_report_always_disables_thinking(report_env, monkeypatch):
     calls = _responses(monkeypatch, [GOOD])
     P.build_report([])
     assert calls == [True]
+
+
+# --- 모델 폴백 --------------------------------------------------------
+# 2026-10-14~15, REPORT_MODEL 이 33시간 동안 503 만 뱉어 리포트가 이틀 없었다.
+# 같은 키로 flash-lite 는 그 내내 멀쩡했고, 무료 티어 한도는 모델별로 세므로
+# 모델을 바꾸면 쓰지 않은 버킷이 남아 있다.
+def test_report_falls_back_after_primary_exhausts_attempts(report_env, monkeypatch):
+    saved, _ = report_env
+    models = []
+    _responses(monkeypatch, [FakeAPIError(503, "high demand")] * P.REPORT_ATTEMPTS + [GOOD],
+               models=models)
+    P.build_report([])
+    assert len(saved) == 1                                  # 리포트가 나온다
+    assert models[:P.REPORT_ATTEMPTS] == [P.REPORT_MODEL] * P.REPORT_ATTEMPTS
+    assert models[-1] == P.REPORT_FALLBACK_MODEL
+
+
+def test_report_saves_model_that_actually_produced_body(report_env, monkeypatch):
+    saved, _ = report_env
+    _responses(monkeypatch, [FakeAPIError(503, "x")] * P.REPORT_ATTEMPTS + [GOOD])
+    P.build_report([])
+    # 폴백이 걸린 날을 나중에 구분하려면 상수가 아니라 쓰인 모델이 남아야 한다
+    assert saved[0]["model"] == P.REPORT_FALLBACK_MODEL
+
+
+def test_report_records_primary_model_on_normal_day(report_env, monkeypatch):
+    saved, _ = report_env
+    models = []
+    _responses(monkeypatch, [GOOD], models=models)
+    P.build_report([])
+    assert models == [P.REPORT_MODEL]                       # 폴백은 건드리지 않는다
+    assert saved[0]["model"] == P.REPORT_MODEL
+
+
+def test_report_switches_model_immediately_on_quota_exhaustion(report_env, monkeypatch):
+    """429 는 재시도 대상이 아니다. `Please retry in 22h8m41s` 를 받고도 2분 기다렸다
+    다시 찌르던 2026-10-15 실행의 헛걸음을 없앤다."""
+    saved, slept = report_env
+    models = []
+    _responses(monkeypatch, [FakeAPIError(429, "RESOURCE_EXHAUSTED"), GOOD], models=models)
+    P.build_report([])
+    assert models == [P.REPORT_MODEL, P.REPORT_FALLBACK_MODEL]
+    assert slept == []                                      # 기다리지 않는다
+    assert len(saved) == 1
+
+
+def test_report_raises_when_every_model_hits_quota(report_env, monkeypatch):
+    saved, slept = report_env
+    _responses(monkeypatch, [FakeAPIError(429, "RESOURCE_EXHAUSTED")] * len(P.REPORT_MODELS))
+    with pytest.raises(FakeAPIError):
+        P.build_report([])
+    assert saved == [] and slept == []
+
+
+def test_report_falls_back_on_persistently_malformed_output(report_env, monkeypatch):
+    """본래 모델이 형태 불량만 내놓아도 폴백이 받는다 — 목표는 '리포트가 있는 것'."""
+    saved, _ = report_env
+    models = []
+    _responses(monkeypatch, ["Let's double check the rules."] * P.REPORT_ATTEMPTS + [GOOD],
+               models=models)
+    P.build_report([])
+    assert len(saved) == 1 and models[-1] == P.REPORT_FALLBACK_MODEL
+
+
+def test_report_does_not_fall_back_on_non_transient(report_env, monkeypatch):
+    """400 은 모델을 바꿔도 같은 이유로 실패한다 — 폴백 호출을 낭비하지 않는다."""
+    saved, _ = report_env
+    models = []
+    _responses(monkeypatch, [FakeAPIError(400, "bad request"), GOOD], models=models)
+    with pytest.raises(FakeAPIError):
+        P.build_report([])
+    assert models == [P.REPORT_MODEL] and saved == []
+
+
+def test_fallback_model_differs_from_primary():
+    """사슬이 같은 모델 둘이면 폴백이 아무것도 못 한다(한도도 용량도 공유)."""
+    assert P.REPORT_FALLBACK_MODEL != P.REPORT_MODEL
+    assert P.REPORT_MODELS == (P.REPORT_MODEL, P.REPORT_FALLBACK_MODEL)
 
 
 # --- 부동소수 꼬리 정리 ------------------------------------------------
