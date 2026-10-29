@@ -8,11 +8,15 @@ pipeline.py — 일일 파이프라인 (GitHub Actions cron 에서 실행)
   4) 감정 일집계                  -> sentiment_daily upsert
   5) 감정 급변 시그널(규칙)       -> signals upsert
   6) LLM 리포트(그라운딩, Sonnet) -> reports upsert
+  7) 아침 브리핑 메일             -> Gmail 로 요약 전송 (설정 시)
 
 환경변수 (GitHub repo secrets 로 주입):
   SUPABASE_URL, SUPABASE_KEY        (service_role 키)
   GEMINI_API_KEY                    (Google AI Studio, 무료 티어)
   NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
+  GMAIL_ADDRESS, GMAIL_APP_PASSWORD, HOLDING_SYMBOLS  (선택, 아침 브리핑 메일)
+
+로컬에서 알림만 확인:  python pipeline.py --notify-only
 
 의존성: supabase, google-genai, pykrx, requests  (requirements.txt 참고)
 
@@ -22,6 +26,7 @@ pipeline.py — 일일 파이프라인 (GitHub Actions cron 에서 실행)
 
 import os
 import re
+import sys
 import json
 import html
 import time
@@ -770,18 +775,243 @@ def build_report(tickers):
 
 
 # ======================================================================
-def main():
+# 7) 아침 브리핑 메일 알림
+# ======================================================================
+# 리포트가 저장된 뒤 Gmail 로 요약을 보낸다(보내는 사람 = 받는 사람 = 내 계정).
+# 본문은 LLM 리포트를 옮기지 않고 시그널·집계 행에서 결정론적으로 만든다 — 리포트는
+# 같은 숫자를 문장으로 풀어 쓴 것이라 폰 화면에는 길기만 하고(2천 자 넘음), LLM 이
+# 실패한 날의 영향도 안 받는다.
+#
+# 보유 종목은 레포에 둘 수 없다(공개 레포, portfolio.json 은 커밋 금지). 그래서
+# HOLDING_SYMBOLS 시크릿에 종목 코드만 콤마로 받는다 — 수량·평단은 넣지 않는다.
+#
+# 메일 설정이 없으면 조용히 건너뛴다. 전송이 실패해도 파이프라인은 실패로 만들지
+# 않는다 — 리포트는 이미 저장됐고, 잡을 실패시켜도 가드 때문에 다시 돌지 않는다.
+DASHBOARD_URL = "https://briefing-lake.vercel.app"
+GMAIL_SMTP = ("smtp.gmail.com", 465)
+HEADLINES_PER_SIGNAL = 2     # 보유 종목 시그널마다 붙일 헤드라인 수
+SEVERITY_RANK = {"high": 0, "mid": 1, "low": 2}
+WEEKDAYS_KO = "월화수목금토일"
+DISCLAIMER_SHORT = "정보 제공 목적이며 투자 판단의 근거가 아닙니다."
+
+
+def parse_holdings(raw: str) -> list:
+    """'005930, 000660,aapl' -> ['005930', '000660', 'AAPL']. 순서 유지, 중복 제거. (순수 함수)"""
+    out = []
+    for s in (raw or "").split(","):
+        s = s.strip().upper()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def pick_headlines(news_rows, signal_type, n: int = HEADLINES_PER_SIGNAL) -> list:
+    """시그널 방향으로 가장 강한 기사 제목 n개. (순수 함수)
+
+    긍정 급변이면 감정이 높은 순, 부정 급변이면 낮은 순이다. 시그널의 '이유'를
+    보여주려는 것이라 반대 방향 기사는 앞에 오면 안 된다.
+    """
+    rows = [r for r in (news_rows or []) if r.get("sentiment") is not None]
+    rows.sort(key=lambda r: r["sentiment"], reverse=(signal_type == "sentiment_surge_pos"))
+    return [r["title"] for r in rows[:n]]
+
+
+def _signal_text(name, sig) -> str:
+    ev = sig.get("evidence") or {}
+    label = "긍정 급변" if sig["type"] == "sentiment_surge_pos" else "부정 급변"
+    delta = ev.get("delta")
+    delta_txt = f" ({delta:+.2f})" if delta is not None else ""
+    return f"{name} {label} · {sig['severity']}{delta_txt}"
+
+
+def _signal_sort_key(sig):
+    delta = (sig.get("evidence") or {}).get("delta") or 0
+    return (SEVERITY_RANK.get(sig["severity"], 9), -abs(delta))
+
+
+def build_briefing(report_date, window, tickers, signals, daily,
+                   holdings=(), news=()) -> dict:
+    """메일로 보낼 아침 브리핑. 제목과 본문 줄 목록을 돌려준다. (순수 함수)
+
+    본문 줄은 (종류, 글) 쌍이다. 같은 줄을 평문과 HTML 두 가지로 그리기 위해서다.
+    종류: title / sub / heading / pos / neg / item / headline / text / blank
+    - holdings: 보유 종목 코드. 비어 있으면 '내 보유 종목' 블록을 뺀다.
+    - news: 보유 종목 시그널의 근거 기사(id, ticker_id, title, sentiment).
+    """
+    by_id = {t["id"]: t for t in tickers}
+    by_symbol = {t["symbol"]: t for t in tickers}
+    sigs_of = {}
+    for s in signals or []:
+        sigs_of.setdefault(s["ticker_id"], []).append(s)
+    daily_of = {d["ticker_id"]: d for d in (daily or [])}
+    news_of = {}
+    for n in news or []:
+        news_of.setdefault(n["ticker_id"], []).append(n)
+
+    def kind_of(sig):
+        return "pos" if sig["type"] == "sentiment_surge_pos" else "neg"
+
+    start, end = window
+    day = f"{report_date:%m/%d}({WEEKDAYS_KO[report_date.weekday()]})"
+    lines = [
+        ("title", f"{day} 아침 브리핑"),
+        ("sub", f"뉴스 구간 {start:%m/%d %H:%M} ~ {end:%m/%d %H:%M}"),
+    ]
+
+    held_sig_count = 0
+    if holdings:
+        lines += [("blank", ""), ("heading", "내 보유 종목")]
+        # 시그널이 걸린 종목을 위로. 나머지는 입력한 순서 그대로.
+        ordered = sorted(holdings, key=lambda sym: sym not in by_symbol
+                         or by_symbol[sym]["id"] not in sigs_of)
+        for sym in ordered:
+            t = by_symbol.get(sym)
+            if t is None:
+                lines.append(("item", f"{sym} 워치리스트 밖 (데이터 없음)"))
+                continue
+            tid = t["id"]
+            if tid in sigs_of:
+                for sig in sorted(sigs_of[tid], key=_signal_sort_key):
+                    held_sig_count += 1
+                    lines.append((kind_of(sig), _signal_text(t["name"], sig)))
+                    for title in pick_headlines(news_of.get(tid), sig["type"]):
+                        lines.append(("headline", title))
+            elif tid in daily_of:
+                d = daily_of[tid]
+                base = d.get("baseline")
+                base_txt = f", 기준 {base:+.2f}" if base is not None else ""
+                lines.append(("item", f"{t['name']} 감정 {d['avg_sentiment']:+.2f}"
+                                      f" (뉴스 {d['news_count']}건{base_txt})"))
+            else:
+                lines.append(("item", f"{t['name']} 새 뉴스 없음"))
+
+    all_sigs = sorted(signals or [], key=_signal_sort_key)
+    lines.append(("blank", ""))
+    if all_sigs:
+        lines.append(("heading", f"전체 시그널 {len(all_sigs)}건"))
+        for sig in all_sigs:
+            t = by_id.get(sig["ticker_id"])
+            name = t["name"] if t else f"#{sig['ticker_id']}"
+            lines.append((kind_of(sig), _signal_text(name, sig)))
+    else:
+        lines.append(("text", "감정 급변 시그널이 없습니다."))
+
+    subject = f"☀️ {day} 아침 브리핑 · 시그널 {len(all_sigs)}건"
+    if held_sig_count:
+        subject += f" (보유 {held_sig_count})"
+    return {"subject": subject, "lines": lines}
+
+
+_TEXT_PREFIX = {"title": "☀️ ", "heading": "■ ", "pos": "🔺 ", "neg": "🔻 ",
+                "item": "· ", "headline": "   - "}
+
+
+def render_text(briefing) -> str:
+    """평문 본문(HTML 을 못 보는 메일 앱용). (순수 함수)"""
+    body = [_TEXT_PREFIX.get(k, "") + s for k, s in briefing["lines"]]
+    body += ["", f"대시보드: {DASHBOARD_URL}", f"⚠️ {DISCLAIMER_SHORT}"]
+    return "\n".join(body)
+
+
+_HTML_STYLE = {
+    "title": "font-size:20px;font-weight:700;margin:0 0 4px",
+    "sub": "color:#6b7280;font-size:13px;margin:0",
+    "heading": "font-size:15px;font-weight:700;margin:20px 0 8px;"
+               "padding-bottom:4px;border-bottom:1px solid #e5e7eb",
+    "pos": "color:#dc2626;font-weight:600;margin:6px 0 2px",   # 국내 관례: 상승=빨강
+    "neg": "color:#2563eb;font-weight:600;margin:6px 0 2px",
+    "item": "margin:4px 0",
+    "headline": "color:#4b5563;font-size:13px;margin:2px 0 2px 16px",
+    "text": "color:#6b7280;margin:4px 0",
+}
+# 제목·항목 구분은 스타일이 맡으므로, HTML 에는 방향 표시와 헤드라인 기호만 남긴다.
+_HTML_PREFIX = {"title": "☀️ ", "pos": "▲ ", "neg": "▼ ", "headline": "– "}
+
+
+def render_html(briefing) -> str:
+    """HTML 본문. 메일 앱은 <style> 을 버리는 곳이 많아 인라인 스타일만 쓴다. (순수 함수)"""
+    parts = []
+    for kind, s in briefing["lines"]:
+        if kind == "blank":
+            continue
+        prefix = _HTML_PREFIX.get(kind, "")
+        parts.append(f'<p style="{_HTML_STYLE[kind]}">{html.escape(prefix + s)}</p>')
+    parts.append(f'<p style="margin:24px 0 4px"><a href="{DASHBOARD_URL}" '
+                 f'style="color:#2563eb">대시보드에서 자세히 보기 →</a></p>')
+    parts.append(f'<p style="color:#9ca3af;font-size:12px;margin:0">{DISCLAIMER_SHORT}</p>')
+    return ('<div style="font-family:-apple-system,\'Apple SD Gothic Neo\',sans-serif;'
+            'max-width:560px;color:#111827;line-height:1.5">' + "".join(parts) + "</div>")
+
+
+def send_gmail(address: str, app_password: str, to: str, subject: str,
+               text: str, html_body: str):
+    import smtplib
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = address
+    msg["To"] = to
+    msg.set_content(text)
+    msg.add_alternative(html_body, subtype="html")
+    with smtplib.SMTP_SSL(*GMAIL_SMTP, timeout=30) as smtp:
+        # login() 은 PLAIN 이 535 로 거절되면 LOGIN 으로 다시 시도하는데, Gmail 은
+        # 그 사이 연결을 끊는다. 그러면 '비밀번호 틀림'이 SMTPServerDisconnected 로
+        # 가려져 로그만 봐서는 원인을 알 수 없다. PLAIN 한 번만 시도해 535 를 그대로 올린다.
+        smtp.ehlo()
+        smtp.user, smtp.password = address, app_password
+        smtp.auth("PLAIN", smtp.auth_plain)
+        smtp.send_message(msg)
+
+
+def notify_briefing(tickers):
+    """오늘 시그널·집계로 브리핑을 만들어 메일로 보낸다."""
+    address = os.environ.get("GMAIL_ADDRESS")
+    # 앱 비밀번호는 4자리씩 띄어서 보여 주는데, 그대로 붙여 넣어도 되게 공백을 뺀다.
+    app_password = (os.environ.get("GMAIL_APP_PASSWORD") or "").replace(" ", "")
+    if not address or not app_password:
+        print("[notify] GMAIL_ADDRESS/GMAIL_APP_PASSWORD 가 없어 건너뜀")
+        return
+    to = os.environ.get("BRIEFING_EMAIL_TO") or address
+    try:
+        today = TODAY.isoformat()
+        sigs = get_sb().table("signals").select("*").eq("date", today).execute().data
+        daily = get_sb().table("sentiment_daily").select("*").eq("date", today).execute().data
+        holdings = parse_holdings(os.environ.get("HOLDING_SYMBOLS", ""))
+
+        held_ids = {t["id"] for t in tickers if t["symbol"] in holdings}
+        news_ids = [nid for s in (sigs or []) if s["ticker_id"] in held_ids
+                    for nid in (s.get("evidence") or {}).get("news_ids", [])]
+        news = get_sb().table("news").select("id,ticker_id,title,sentiment") \
+            .in_("id", news_ids).execute().data if news_ids else []
+
+        briefing = build_briefing(TODAY, briefing_window(), tickers, sigs, daily,
+                                  holdings, news)
+        send_gmail(address, app_password, to, briefing["subject"],
+                   render_text(briefing), render_html(briefing))
+        print(f"[notify] 메일 전송 완료: {briefing['subject']}")
+    except Exception as e:
+        print(f"::warning::[notify] 메일 전송 실패 — 리포트는 저장됐다: "
+              f"{type(e).__name__}: {e}")
+
+
+# ======================================================================
+def main(notify_only=False):
     tickers = get_sb().table("tickers").select("*").eq("active", True).execute().data
     if not tickers:
         print("워치리스트가 비어있음. tickers 테이블에 종목을 먼저 넣으세요.")
+        return
+    if notify_only:
+        # 이미 저장된 오늘 데이터로 알림만 다시 보낸다(설정 확인용, LLM 호출 없음).
+        notify_briefing(tickers)
         return
     collect_prices(tickers)
     new_items = collect_news(tickers)
     enrich_news(new_items)
     aggregate_and_signal(tickers)
     build_report(tickers)
+    notify_briefing(tickers)
     print("파이프라인 완료.")
 
 
 if __name__ == "__main__":
-    main()
+    main(notify_only="--notify-only" in sys.argv)
