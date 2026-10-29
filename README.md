@@ -67,6 +67,7 @@ briefing/
 | `SUPABASE_URL` / `SUPABASE_KEY` | DB 저장/조회 | Supabase (파이프라인=service_role) |
 | `GEMINI_API_KEY` | 감정분석/리포트 | Google AI Studio (무료 티어) |
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 뉴스 검색 | 네이버 개발자센터 |
+| `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` / `HOLDING_SYMBOLS` | 아침 브리핑 메일 (선택) | Google 계정 앱 비밀번호 |
 
 - 로컬: `.env.example` → `.env` 복사 후 값 입력 (`.env` 는 커밋 금지).
 - 잡: GitHub repo Secrets. 서빙: Fly/Render 환경변수. 프론트: Vercel 환경변수.
@@ -356,6 +357,27 @@ PORTFOLIO_ALIAS_OVERRIDES = {
 브리핑). 아침엔 당일 장이 아직 열리지 않았기 때문입니다. 다루는 구간은 실행 시각이
 아니라 `pipeline.py` 의 `BRIEFING_CUTOFF_HOUR`(07:00 KST)로 자르므로, cron 이 밀려도
 같은 구간을 다룹니다.
+
+#### 아침 브리핑 메일 (선택)
+
+파이프라인이 리포트를 저장한 뒤 내 Gmail 로 요약 메일을 보냅니다(07:15 KST 전후, 보내는
+사람 = 받는 사람). 내 보유 종목의 감정·시그널(+근거 헤드라인 2개)과 전체 시그널 목록,
+대시보드 링크가 들어갑니다. 본문은 LLM 리포트가 아니라 시그널·집계 행에서 결정론적으로
+만듭니다.
+
+1. Google 계정에서 **2단계 인증**을 켭니다.
+2. https://myaccount.google.com/apppasswords 에서 **앱 비밀번호**(16자리)를 발급합니다.
+   Gmail 비밀번호가 아니라 메일 보내기 전용이고, 같은 페이지에서 언제든 지울 수 있습니다.
+3. GitHub repo **Settings → Secrets and variables → Actions** 에 등록합니다.
+   - `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` (띄어쓰기 포함해 붙여 넣어도 됩니다)
+   - `HOLDING_SYMBOLS` (선택): 보유 종목 코드만 콤마로, 예 `005930,000660`. 공개 레포라
+     시크릿에 둡니다. 수량·평단은 넣지 않습니다.
+4. 확인: 로컬 `.env` 에 같은 값을 넣고 `cd pipeline && python pipeline.py --notify-only`
+   — 이미 저장된 오늘 데이터로 메일만 보냅니다(LLM 호출 없음).
+
+시크릿이 없으면 알림 단계만 건너뜁니다. 전송이 실패해도 잡은 실패로 만들지 않고 경고만
+남깁니다(리포트는 이미 저장됐으므로). 중복 실행 가드 덕분에 하루 한 번만 갑니다 — `force`
+로 다시 돌리면 다시 갑니다.
 
 #### 왜 외부 스케줄러인가
 

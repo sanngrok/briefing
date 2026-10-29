@@ -103,4 +103,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          # 아침 브리핑 메일(선택). 비어 있으면 알림 단계만 건너뛴다.
+          # HOLDING_SYMBOLS 는 공개 레포라 시크릿으로 둔다(종목 코드만, 콤마 구분).
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          HOLDING_SYMBOLS: ${{ secrets.HOLDING_SYMBOLS }}
         run: python pipeline.py
