@@ -4,10 +4,10 @@ test_notify.py — 아침 브리핑 메일 본문 단위 테스트 (키·네트�
 실행:  cd pipeline && python -m pytest tests/test_notify.py -v
 """
 
-from datetime import date
+from datetime import date, datetime
 
 from pipeline import (build_briefing, briefing_window, parse_holdings, pick_headlines,
-                      render_html, render_text, DASHBOARD_URL)
+                      render_html, render_text, DASHBOARD_URL, KST)
 
 TODAY = date(2026, 10, 29)   # 목요일
 WINDOW = briefing_window(TODAY)
@@ -138,3 +138,32 @@ def test_render_html_escapes_headlines():
     assert "&lt;b&gt;속보&lt;/b&gt; &amp; 단독" in out
     assert "<b>속보" not in out
     assert f'href="{DASHBOARD_URL}"' in out
+
+
+# ---- 예비 cron 지연 경고 ------------------------------------------------
+
+LATE_AT = datetime(2026, 11, 19, 18, 47, tzinfo=KST)
+
+
+def test_on_time_has_no_warning():
+    b = build_briefing(TODAY, WINDOW, TICKERS, SIGNALS, DAILY)
+    assert not b["subject"].startswith("⚠️")
+    assert all(kind != "warn" for kind, _ in b["lines"])
+
+
+def test_late_marks_subject():
+    b = build_briefing(TODAY, WINDOW, TICKERS, SIGNALS, DAILY, ["000660"], late_at=LATE_AT)
+    assert b["subject"] == "⚠️ [지연] ☀️ 10/29(목) 아침 브리핑 · 시그널 2건 (보유 1)"
+
+
+def test_late_warning_sits_right_under_header():
+    lines = build_briefing(TODAY, WINDOW, TICKERS, SIGNALS, DAILY, late_at=LATE_AT)["lines"]
+    kind, text = lines[3]
+    assert kind == "warn"
+    assert "발송 18:47" in text and "cron-job.org" in text
+
+
+def test_late_warning_rendered_in_both_formats():
+    b = build_briefing(TODAY, WINDOW, TICKERS, SIGNALS, DAILY, late_at=LATE_AT)
+    assert "⚠️ 예비 스케줄로 늦게 실행됐습니다" in render_text(b)
+    assert "background:#fef3c7" in render_html(b)

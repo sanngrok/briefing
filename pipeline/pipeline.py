@@ -830,13 +830,15 @@ def _signal_sort_key(sig):
 
 
 def build_briefing(report_date, window, tickers, signals, daily,
-                   holdings=(), news=()) -> dict:
+                   holdings=(), news=(), late_at=None) -> dict:
     """메일로 보낼 아침 브리핑. 제목과 본문 줄 목록을 돌려준다. (순수 함수)
 
     본문 줄은 (종류, 글) 쌍이다. 같은 줄을 평문과 HTML 두 가지로 그리기 위해서다.
-    종류: title / sub / heading / pos / neg / item / headline / text / blank
+    종류: title / sub / warn / heading / pos / neg / item / headline / text / blank
     - holdings: 보유 종목 코드. 비어 있으면 '내 보유 종목' 블록을 뺀다.
     - news: 보유 종목 시그널의 근거 기사(id, ticker_id, title, sentiment).
+    - late_at: 예비 cron 으로 늦게 돈 날의 발송 시각(KST). 주면 제목과 본문 맨 위에
+      경고를 단다 — 아침 트리거가 죽어도 메일은 계속 오니, 메일에서 티가 나야 한다.
     """
     by_id = {t["id"]: t for t in tickers}
     by_symbol = {t["symbol"]: t for t in tickers}
@@ -857,6 +859,11 @@ def build_briefing(report_date, window, tickers, signals, daily,
         ("title", f"{day} 아침 브리핑"),
         ("sub", f"뉴스 구간 {start:%m/%d %H:%M} ~ {end:%m/%d %H:%M}"),
     ]
+    if late_at is not None:
+        lines += [("blank", ""),
+                  ("warn", f"예비 스케줄로 늦게 실행됐습니다(발송 {late_at:%H:%M}, 정상은 07:15 전후). "
+                           "아침 7시 외부 스케줄러(cron-job.org) 호출이 없었거나 그 실행이 "
+                           "실패했습니다 — cron-job.org 실행 기록을 확인하세요.")]
 
     held_sig_count = 0
     if holdings:
@@ -899,10 +906,12 @@ def build_briefing(report_date, window, tickers, signals, daily,
     subject = f"☀️ {day} 아침 브리핑 · 시그널 {len(all_sigs)}건"
     if held_sig_count:
         subject += f" (보유 {held_sig_count})"
+    if late_at is not None:
+        subject = "⚠️ [지연] " + subject
     return {"subject": subject, "lines": lines}
 
 
-_TEXT_PREFIX = {"title": "☀️ ", "heading": "■ ", "pos": "🔺 ", "neg": "🔻 ",
+_TEXT_PREFIX = {"title": "☀️ ", "warn": "⚠️ ", "heading": "■ ", "pos": "🔺 ", "neg": "🔻 ",
                 "item": "· ", "headline": "   - "}
 
 
@@ -916,6 +925,8 @@ def render_text(briefing) -> str:
 _HTML_STYLE = {
     "title": "font-size:20px;font-weight:700;margin:0 0 4px",
     "sub": "color:#6b7280;font-size:13px;margin:0",
+    "warn": "background:#fef3c7;color:#92400e;font-size:13px;margin:12px 0 0;"
+            "padding:10px 12px;border-radius:6px",
     "heading": "font-size:15px;font-weight:700;margin:20px 0 8px;"
                "padding-bottom:4px;border-bottom:1px solid #e5e7eb",
     "pos": "color:#dc2626;font-weight:600;margin:6px 0 2px",   # 국내 관례: 상승=빨강
@@ -925,7 +936,7 @@ _HTML_STYLE = {
     "text": "color:#6b7280;margin:4px 0",
 }
 # 제목·항목 구분은 스타일이 맡으므로, HTML 에는 방향 표시와 헤드라인 기호만 남긴다.
-_HTML_PREFIX = {"title": "☀️ ", "pos": "▲ ", "neg": "▼ ", "headline": "– "}
+_HTML_PREFIX = {"title": "☀️ ", "warn": "⚠️ ", "pos": "▲ ", "neg": "▼ ", "headline": "– "}
 
 
 def render_html(briefing) -> str:
@@ -984,8 +995,15 @@ def notify_briefing(tickers):
         news = get_sb().table("news").select("id,ticker_id,title,sentiment") \
             .in_("id", news_ids).execute().data if news_ids else []
 
+        # 예비 cron(schedule)으로 돌았다는 건 아침 dispatch 가 없었거나 실패했다는 뜻이다.
+        # 2026-10-30 이후 외부 스케줄러가 끊겼는데 메일은 저녁에 계속 와서 3주간 몰랐다.
+        # GITHUB_EVENT_NAME 은 Actions 가 넣어 주는 기본 환경변수다(로컬에선 없음).
+        late_at = None
+        if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+            late_at = datetime.now(KST)
+            print("::warning::[notify] 예비 cron 으로 실행됨 — 아침 외부 스케줄러 호출을 확인하세요")
         briefing = build_briefing(TODAY, briefing_window(), tickers, sigs, daily,
-                                  holdings, news)
+                                  holdings, news, late_at=late_at)
         send_gmail(address, app_password, to, briefing["subject"],
                    render_text(briefing), render_html(briefing))
         print(f"[notify] 메일 전송 완료: {briefing['subject']}")
