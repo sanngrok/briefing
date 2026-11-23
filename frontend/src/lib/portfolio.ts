@@ -328,10 +328,24 @@ export function parseHoldings(raw: unknown): Holding[] {
   return out
 }
 
-/** 백업용 JSON 문자열. */
-export function serializeHoldings(holdings: Holding[], now = new Date()): string {
+/**
+ * 백업용 JSON 문자열. 자산 추이(history)와 목표가·손절가(alerts)도 함께 담을 수
+ * 있다 — 둘 다 선택 항목이라 예전 파일·toss_sync.py 출력과 호환된다.
+ */
+export function serializeHoldings(
+  holdings: Holding[],
+  now = new Date(),
+  extras: { history?: unknown[]; alerts?: Record<string, unknown> } = {},
+): string {
+  const { history, alerts } = extras
   return JSON.stringify(
-    { version: EXPORT_VERSION, exportedAt: now.toISOString(), holdings },
+    {
+      version: EXPORT_VERSION,
+      exportedAt: now.toISOString(),
+      holdings,
+      ...(history && history.length ? { history } : {}),
+      ...(alerts && Object.keys(alerts).length ? { alerts } : {}),
+    },
     null,
     2,
   )

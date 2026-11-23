@@ -212,3 +212,57 @@ def test_pick_account_raises_on_unknown_and_empty():
 def test_mask_account_no_keeps_only_edges():
     assert mask_account_no("12345678901") == "1234***8901"
     assert mask_account_no("1234") == "****"
+
+
+# --- 자산 추이 (history) ------------------------------------------------
+from datetime import datetime, timezone
+
+from toss_sync import merge_history, read_history, snapshot_of
+
+NOW = datetime(2026, 11, 24, 7, 30, tzinfo=timezone.utc)   # KST 16:30
+
+
+def test_snapshot_of_converts_usd_with_import_fx():
+    holdings = [
+        {"symbol": "005930", "quantity": 10, "avgPrice": 200000, "importedClose": 180000},
+        {"symbol": "PLTR", "quantity": 2, "avgPrice": 150.0, "importedClose": 200.0,
+         "currency": "USD", "fxAtImport": 1400},
+    ]
+    assert snapshot_of(holdings, NOW) == {
+        "date": "2026-11-24",
+        "value": 10 * 180000 + 2 * 200 * 1400,
+        "cost": 10 * 200000 + 2 * 150 * 1400,
+        "at": "2026-11-24T07:30:00Z",
+    }
+
+
+def test_snapshot_of_skips_when_any_price_missing():
+    assert snapshot_of([{"symbol": "A", "quantity": 1, "avgPrice": 1}], NOW) is None
+    assert snapshot_of([], NOW) is None
+
+
+def test_snapshot_date_is_kst():
+    late = datetime(2026, 11, 24, 15, 30, tzinfo=timezone.utc)   # KST 다음 날 00:30
+    h = [{"symbol": "A", "quantity": 1, "avgPrice": 1, "importedClose": 2}]
+    assert snapshot_of(h, late)["date"] == "2026-11-25"
+
+
+def test_merge_history_upserts_today_and_drops_junk():
+    old = [{"date": "2026-11-21", "value": 1, "cost": 1},
+           {"date": "2026-11-24", "value": 5, "cost": 1},
+           {"date": "bad", "value": 1, "cost": 1}, {"date": "2026-11-20", "value": "x", "cost": 1},
+           "junk"]
+    snap = {"date": "2026-11-24", "value": 9, "cost": 1, "at": "z"}
+    assert [(p["date"], p["value"]) for p in merge_history(old, snap)] == [
+        ("2026-11-21", 1), ("2026-11-24", 9)]
+    assert merge_history(None, None) == []
+
+
+def test_read_history_tolerates_missing_or_broken_file(tmp_path):
+    assert read_history(str(tmp_path / "none.json")) == []
+    broken = tmp_path / "b.json"
+    broken.write_text("{not json")
+    assert read_history(str(broken)) == []
+    ok = tmp_path / "ok.json"
+    ok.write_text('{"holdings": [], "history": [{"date": "2026-11-24", "value": 1, "cost": 1}]}')
+    assert read_history(str(ok)) == [{"date": "2026-11-24", "value": 1, "cost": 1}]
