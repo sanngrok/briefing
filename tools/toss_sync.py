@@ -28,11 +28,13 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 BASE_URL = os.environ.get("TOSS_API_BASE", "https://openapi.tossinvest.com")
 FX_API_URL = os.environ.get("TOSS_FX_API", "https://api.frankfurter.app/latest")
 EXPORT_VERSION = 1   # frontend/src/lib/portfolio.ts 의 EXPORT_VERSION 과 맞춘다
+HISTORY_MAX = 800    # frontend/src/lib/history.ts 의 HISTORY_MAX 와 맞춘다
+KST = timezone(timedelta(hours=9))
 
 
 # =====================================================================
@@ -115,14 +117,76 @@ def to_holdings(overview: dict, include_us: bool = False, fx_rate: float = None)
     return holdings, skipped
 
 
-def build_export(holdings: list, now=None) -> dict:
-    """대시보드 '가져오기'가 그대로 읽는 백업 형태."""
+def build_export(holdings: list, now=None, history=None) -> dict:
+    """대시보드 '가져오기'가 그대로 읽는 백업 형태. history 는 자산 추이(선택)."""
     now = now or datetime.now(timezone.utc)
-    return {
+    out = {
         "version": EXPORT_VERSION,
         "exportedAt": now.isoformat().replace("+00:00", "Z"),
         "holdings": holdings,
     }
+    if history:
+        out["history"] = history
+    return out
+
+
+def snapshot_of(holdings: list, now=None):
+    """보유 목록 → 그날의 자산 추이 한 점 {date, value, cost, at}.
+
+    대시보드 '자산 추이'와 같은 정의다: 평가금액 = 수량 × 가져온 시세, 매입금액 =
+    수량 × 평단, 해외 종목은 둘 다 그날 환율(fxAtImport)로 원화 환산. 시세가 없는
+    종목이 하나라도 있으면 합계가 덜 잡혀 그래프가 꺾이므로 점을 만들지 않는다(None).
+    """
+    if not holdings:
+        return None
+    value = cost = 0.0
+    for h in holdings:
+        close = h.get("importedClose")
+        if close is None:
+            return None
+        fx = h.get("fxAtImport") if h.get("currency") == "USD" else 1
+        if not fx:
+            return None
+        value += h["quantity"] * close * fx
+        cost += h["quantity"] * h["avgPrice"] * fx
+    now = now or datetime.now(timezone.utc)
+    return {
+        "date": now.astimezone(KST).date().isoformat(),
+        "value": round(value),
+        "cost": round(cost),
+        "at": now.isoformat().replace("+00:00", "Z"),
+    }
+
+
+def merge_history(old, snap) -> list:
+    """이전 파일의 history 에 오늘 점을 넣거나 덮어쓴다(날짜순, 최대 HISTORY_MAX).
+    깨진 점은 버린다 — 대시보드 parseHistory 와 같은 관용."""
+    by_date = {}
+    for p in old if isinstance(old, list) else []:
+        if not isinstance(p, dict):
+            continue
+        d = p.get("date")
+        if not (isinstance(d, str) and len(d) == 10):
+            continue
+        try:
+            float(p.get("value")), float(p.get("cost"))
+        except (TypeError, ValueError):
+            continue
+        by_date[d] = p
+    if snap:
+        by_date[snap["date"]] = snap
+    return [by_date[d] for d in sorted(by_date)][-HISTORY_MAX:]
+
+
+def read_history(path: str) -> list:
+    """이전 portfolio.json 의 history. 파일이 없거나 깨졌으면 빈 목록."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    hist = data.get("history") if isinstance(data, dict) else None
+    return hist if isinstance(hist, list) else []
 
 
 def pick_account(accounts: list, account_no: str = None) -> dict:
@@ -318,11 +382,14 @@ def main(argv=None) -> int:
 
     holdings, skipped = to_holdings(overview, include_us=args.include_us, fx_rate=fx_rate)
 
-    payload = build_export(holdings)
+    # 자산 추이: 이전 파일의 기록에 오늘 점을 더한다(덮어쓰기로 사라지지 않게).
+    history = merge_history(read_history(args.out), snapshot_of(holdings))
+    payload = build_export(holdings, history=history)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-    print(f"계좌 {mask_account_no(account.get('accountNo'))} · 보유 {len(holdings)}종목 → {args.out}")
+    print(f"계좌 {mask_account_no(account.get('accountNo'))} · 보유 {len(holdings)}종목 → {args.out}"
+          f" (자산 기록 {len(history)}일)")
     for h in holdings:
         unit = "원" if h.get("currency", "KRW") == "KRW" else " USD"
         print(f"  {h['symbol']}  {h['name']}  {h['quantity']:g}주  "

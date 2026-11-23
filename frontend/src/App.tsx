@@ -13,7 +13,21 @@ import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { SideNav } from './components/SideNav'
 import { StockAvatar } from './components/StockAvatar'
-import { loadHoldings, saveHoldings } from './lib/portfolio'
+import { computeRows, computeTotals, loadHoldings, saveHoldings } from './lib/portfolio'
+import { kstDate, loadHistory, mergeHistory, recordSnapshot, saveHistory } from './lib/history'
+import type { Snapshot } from './lib/history'
+import {
+  NOTIFIED_KEY,
+  buildAlertRows,
+  formatAlertPrice,
+  isHit,
+  loadAlerts,
+  notifyKey,
+  pruneNotified,
+  saveAlerts,
+} from './lib/alerts'
+import type { Alerts } from './lib/alerts'
+import type { NotifyPermission } from './components/PriceAlerts'
 import type { Holding } from './lib/portfolio'
 import { isMarketLiveWindow, isUsMarketWindow, isWorldSymbol } from './lib/market'
 import { metaOf, pageFromHash } from './lib/route'
@@ -105,6 +119,34 @@ export default function App() {
   function updateHoldings(next: Holding[]) {
     setHoldings(next)
     setStorageFailed(!saveHoldings(next))
+  }
+
+  // 자산 추이(하루 한 점)와 목표가·손절가. 보유 목록처럼 이 브라우저에만 둔다.
+  const [history, setHistory] = useState<Snapshot[]>(() => loadHistory())
+  const [alerts, setAlerts] = useState<Alerts>(() => loadAlerts())
+  const [notifyPermission, setNotifyPermission] = useState<NotifyPermission>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  )
+
+  function updateAlerts(next: Alerts) {
+    setAlerts(next)
+    if (!saveAlerts(next)) setStorageFailed(true)
+  }
+
+  function importExtras(extras: { history: Snapshot[]; alerts: Alerts }) {
+    if (extras.history.length) {
+      setHistory((prev) => {
+        const next = mergeHistory(prev, extras.history)
+        saveHistory(next)
+        return next
+      })
+    }
+    if (Object.keys(extras.alerts).length) updateAlerts({ ...alerts, ...extras.alerts })
+  }
+
+  function enableNotify() {
+    if (typeof Notification === 'undefined') return
+    Notification.requestPermission().then(setNotifyPermission).catch(() => {})
   }
 
   // 워치리스트는 서버가 가진 것을 그대로 따른다(프론트 하드코딩 금지).
@@ -275,15 +317,84 @@ export default function App() {
 
   const signals = useMemo(() => signalsOfDay(allSignals, report?.date), [allSignals, report])
 
-  // 메뉴 배지: 오늘 시그널 수, 그중 내 보유 종목에 걸린 수
+  // 평가는 화면(내 자산)뿐 아니라 자산 기록·목표가 판정·배지에도 쓰여 여기서 한 번 한다.
+  const pfRows = useMemo(() => computeRows(holdings, quotes, fxUsdKrw), [holdings, quotes, fxUsdKrw])
+  const alertRows = useMemo(() => buildAlertRows(pfRows, alerts, fxUsdKrw), [pfRows, alerts, fxUsdKrw])
+  const alertHits = useMemo(
+    () => alertRows.filter((r) => r.status && isHit(r.status.kind)),
+    [alertRows],
+  )
+
+  // 오늘 총 평가금액을 기록한다(어느 메뉴에 있든). 시세가 안 붙은 종목이 하나라도
+  // 있으면 합계가 덜 잡혀 그래프가 꺾이므로 건너뛴다 — 보유 종목을 바꾼 직후,
+  // 새 시세가 오기 전의 한순간도 여기서 걸러진다.
+  useEffect(() => {
+    if (quotesStatus !== 'ready' || pfRows.length === 0) return
+    const totals = computeTotals(pfRows)
+    if (totals.unpricedCount > 0 || totals.value <= 0) return
+    const snap = {
+      date: kstDate(),
+      value: totals.value,
+      cost: totals.pricedCost,
+      at: new Date().toISOString(),
+    }
+    setHistory((prev) => {
+      const next = recordSnapshot(prev, snap)
+      if (next !== prev) saveHistory(next)
+      return next
+    })
+  }, [pfRows, quotesStatus])
+
+  // 목표가·손절가에 닿으면 브라우저 알림. 같은 종목·같은 종류는 하루 한 번만.
+  // 사이트가 열려 있을 때만 동작한다(장중 15초 폴링에 맞춰 판정된다).
+  useEffect(() => {
+    if (notifyPermission !== 'granted' || alertHits.length === 0) return
+    const today = kstDate()
+    let sent: string[] = []
+    try {
+      sent = pruneNotified(JSON.parse(window.localStorage.getItem(NOTIFIED_KEY) ?? '[]'), today)
+    } catch {
+      sent = []
+    }
+    let changed = false
+    for (const r of alertHits) {
+      const kind = r.status!.kind
+      const key = notifyKey(today, r.symbol, kind)
+      if (sent.includes(key)) continue
+      const target = kind === 'target-hit'
+      const line = target
+        ? `목표가 ${formatAlertPrice(r.setting?.target, r.currency)}`
+        : `손절가 ${formatAlertPrice(r.setting?.stop, r.currency)}`
+      try {
+        new Notification(`${r.name} ${target ? '목표가' : '손절가'} 도달`, {
+          body: `현재 ${formatAlertPrice(r.price, r.currency)} · ${line}`,
+          tag: key,
+        })
+      } catch {
+        // 일부 모바일 브라우저는 페이지에서 직접 만든 알림을 막는다 — 화면 표시로 충분하다
+      }
+      sent.push(key)
+      changed = true
+    }
+    if (changed) {
+      try {
+        window.localStorage.setItem(NOTIFIED_KEY, JSON.stringify(sent))
+      } catch {
+        /* 저장 못 하면 다음 판정에 한 번 더 뜰 뿐 */
+      }
+    }
+  }, [alertHits, notifyPermission])
+
+  // 메뉴 배지: 오늘 시그널 수 / 내 자산은 보유 종목에 걸린 시그널 + 목표가·손절가 도달
   const heldSymbols = useMemo(() => new Set(holdings.map((h) => h.symbol)), [holdings])
-  const badges =
+  const heldSignalCount =
     coreStatus.signals === 'ready'
-      ? {
-          home: signals.length,
-          assets: signals.filter((s) => s.symbol != null && heldSymbols.has(s.symbol)).length,
-        }
-      : undefined
+      ? signals.filter((s) => s.symbol != null && heldSymbols.has(s.symbol)).length
+      : 0
+  const badges = {
+    ...(coreStatus.signals === 'ready' ? { home: signals.length } : {}),
+    assets: heldSignalCount + alertHits.length,
+  }
 
   return (
     <div className="layout">
@@ -353,6 +464,14 @@ export default function App() {
             signals={signals}
             storageFailed={storageFailed}
             quotesStatus={quotesStatus}
+            history={history}
+            today={kstDate()}
+            alerts={alerts}
+            onAlertsChange={updateAlerts}
+            alertRows={alertRows}
+            notifyPermission={notifyPermission}
+            onEnableNotify={enableNotify}
+            onImportExtras={importExtras}
           />
         )}
 

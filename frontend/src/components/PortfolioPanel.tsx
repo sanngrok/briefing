@@ -19,6 +19,13 @@ import {
 import type { Holding, HoldingInput, HoldingRow } from '../lib/portfolio'
 import type { Status } from './LoadState'
 import { StockAvatar } from './StockAvatar'
+import { PortfolioHistory } from './PortfolioHistory'
+import { PriceAlerts } from './PriceAlerts'
+import type { NotifyPermission } from './PriceAlerts'
+import { parseHistory } from '../lib/history'
+import type { Snapshot } from '../lib/history'
+import { parseAlerts } from '../lib/alerts'
+import type { AlertRow, Alerts } from '../lib/alerts'
 
 const EMPTY_FORM: HoldingInput = { symbol: '', name: '', quantity: '', avgPrice: '', memo: '' }
 
@@ -35,6 +42,18 @@ interface Props {
   storageFailed?: boolean
   /** 시세 호출 상태. 실패를 "시세 없음"으로 뭉개지 않기 위해 따로 받는다. */
   quotesStatus?: Status
+  /** 자산 추이 (하루 한 점) */
+  history: Snapshot[]
+  /** 오늘 KST 날짜 — 기간 자르기 기준 */
+  today: string
+  alerts: Alerts
+  onAlertsChange: (next: Alerts) => void
+  /** App 이 판정까지 끝낸 목표가·손절가 줄 (배지·브라우저 알림과 같은 결과) */
+  alertRows: AlertRow[]
+  notifyPermission: NotifyPermission
+  onEnableNotify: () => void
+  /** 가져오기 파일에 들어 있던 자산 추이·알림 설정을 합친다 */
+  onImportExtras: (extras: { history: Snapshot[]; alerts: Alerts }) => void
 }
 
 export function PortfolioPanel({
@@ -48,6 +67,14 @@ export function PortfolioPanel({
   signals,
   storageFailed,
   quotesStatus = 'ready',
+  history,
+  today,
+  alerts,
+  onAlertsChange,
+  alertRows,
+  notifyPermission,
+  onEnableNotify,
+  onImportExtras,
 }: Props) {
   const [form, setForm] = useState<HoldingInput>(EMPTY_FORM)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -156,7 +183,9 @@ export function PortfolioPanel({
   }
 
   function handleExport() {
-    const blob = new Blob([serializeHoldings(holdings)], { type: 'application/json' })
+    const blob = new Blob([serializeHoldings(holdings, new Date(), { history, alerts })], {
+      type: 'application/json',
+    })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -170,7 +199,8 @@ export function PortfolioPanel({
     e.target.value = ''            // 같은 파일을 다시 골라도 change 가 뜨도록
     if (!file) return
     try {
-      const parsed = parseHoldings(JSON.parse(await file.text()))
+      const json = JSON.parse(await file.text())
+      const parsed = parseHoldings(json)
       if (parsed.length === 0) {
         setError('가져올 보유 종목이 없습니다. (형식을 확인하세요)')
         return
@@ -181,8 +211,14 @@ export function PortfolioPanel({
       )
         return
       onChange(parsed)
+      // 자산 추이·알림 설정은 덮어쓰지 않고 합친다 — toss_sync 파일엔 알림이 없다.
+      const importedHistory = parseHistory(json)
+      onImportExtras({ history: importedHistory, alerts: parseAlerts(json?.alerts ?? null) })
       closeForm()
-      flash(`${parsed.length}건 불러옴`)
+      flash(
+        `${parsed.length}건 불러옴` +
+          (importedHistory.length ? ` · 자산 기록 ${importedHistory.length}일 합침` : ''),
+      )
     } catch {
       setError('JSON 파일을 읽지 못했습니다.')
     }
@@ -227,11 +263,23 @@ export function PortfolioPanel({
         </section>
       )}
 
+      {rows.length > 0 && <PortfolioHistory history={history} today={today} />}
+
       {hitSignals.length > 0 && (
         <p className="pf-signal-note">
           <strong>보유 종목 {hitSignals.length}개에 감정 급변 시그널이 떴어요</strong>
           <span>{hitSignals.map((r) => r.name).join(', ')}</span>
         </p>
+      )}
+
+      {rows.length > 0 && (
+        <PriceAlerts
+          rows={alertRows}
+          alerts={alerts}
+          onChange={onAlertsChange}
+          notifyPermission={notifyPermission}
+          onEnableNotify={onEnableNotify}
+        />
       )}
 
       <section className="panel pf-holdings">

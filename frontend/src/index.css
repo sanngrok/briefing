@@ -1762,6 +1762,316 @@ button {
   }
 }
 
+/* ---- 자산 추이 ---- */
+.segmented-sm {
+  padding: 3px;
+  border-radius: 13px;
+}
+
+.segmented-sm .seg {
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 13.5px;
+}
+
+.pf-history-sum {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin: 0 0 2px 4px;
+}
+
+.pf-history-range {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.pf-history-change {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.pf-history-note {
+  margin: 4px 0 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pf-history-chart {
+  margin: 14px -4px 0;
+  /* 툴팁(absolute)이 카드 밖으로 남아 폰에서 페이지가 옆으로 밀리지 않게 */
+  overflow: hidden;
+}
+
+.pf-history-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.legend-line {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+
+.legend-line.legend-dash {
+  margin-left: 10px;
+  background: repeating-linear-gradient(90deg, var(--faint) 0 4px, transparent 4px 7px);
+}
+
+.pf-history-empty {
+  padding: 26px 20px;
+  border-radius: 18px;
+  background: var(--panel-2);
+  text-align: center;
+}
+
+.pf-history-empty-title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 700;
+}
+
+.pf-history-empty-desc {
+  margin: 6px auto 0;
+  max-width: 520px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+@media (max-width: 560px) {
+  .pf-history .pf-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* ---- 목표가 · 손절가 ---- */
+.al-head-btns {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.al-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 12px;
+  border-radius: 10px;
+  background: var(--pos-soft);
+  color: var(--pos);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.al-desc {
+  margin: -4px 0 14px 4px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.al-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 14px;
+  padding: 14px 18px;
+  border-radius: 18px;
+  background: linear-gradient(90deg, var(--good-soft), var(--bad-soft));
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.al-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.al-row {
+  padding: 12px 10px;
+  border-radius: 18px;
+  transition: background 0.2s var(--ease);
+}
+
+@media (hover: hover) {
+  .al-row:hover {
+    background: var(--hover);
+  }
+}
+
+.al-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.al-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.al-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.al-price {
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.al-stale {
+  color: var(--faint);
+}
+
+.al-row-off .al-name {
+  color: var(--text-2);
+}
+
+.al-status {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.st-up {
+  background: var(--up);
+  color: #fff;
+}
+.st-down {
+  background: var(--down);
+  color: #fff;
+}
+.st-up-soft {
+  background: var(--good-soft);
+  color: var(--up);
+}
+.st-down-soft {
+  background: var(--bad-soft);
+  color: var(--down);
+}
+.st-flat {
+  background: var(--panel-3);
+  color: var(--neutral-text);
+}
+
+/* 손절가 ── ● ── 목표가 */
+.al-track-wrap {
+  margin: 12px 4px 0 56px;
+}
+
+.al-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--bad-soft), var(--good-soft));
+}
+
+.al-track-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #90c2ff, #feafb4);
+}
+
+.al-track-dot {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 3px var(--text), 0 2px 6px rgba(0, 29, 58, 0.2);
+  transform: translate(-50%, -50%);
+}
+
+.al-track-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.al-distance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 0 56px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.al-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  gap: 10px 12px;
+  align-items: end;
+  margin: 12px 0 0 52px;
+  padding: 14px;
+  border-radius: 18px;
+  background: var(--panel-2);
+  animation: page-in 0.3s var(--ease) backwards;
+}
+
+.al-clear {
+  margin: 8px 0 0 56px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--danger-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.al-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (max-width: 560px) {
+  .pf-alerts .pf-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .al-head-btns {
+    justify-content: flex-start;
+  }
+  .al-track-wrap,
+  .al-distance,
+  .al-clear {
+    margin-left: 4px;
+  }
+  .al-editor {
+    grid-template-columns: 1fr 1fr;
+    margin-left: 0;
+  }
+  .al-editor .pf-actions {
+    grid-column: span 2;
+  }
+}
+
 /* ---- 로딩 / 실패 자리표시 ----
    "비어 있음"과 "아직 안 옴 · 못 받음"을 화면에서 갈라 준다. Render 무료 티어는
    15분 미사용 뒤 첫 요청이 30~60초 걸려서, 그 구간을 빈 상태로 보여 주면
@@ -1887,7 +2197,8 @@ button {
 /* 움직임 줄이기 설정을 켠 사람에게는 떠오르기·훑기·눌림 효과를 끈다 */
 @media (prefers-reduced-motion: reduce) {
   .content,
-  .pf-form {
+  .pf-form,
+  .al-editor {
     animation: none;
   }
   .skel-bar,

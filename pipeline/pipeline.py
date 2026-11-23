@@ -796,13 +796,144 @@ DISCLAIMER_SHORT = "정보 제공 목적이며 투자 판단의 근거가 아닙
 
 
 def parse_holdings(raw: str) -> list:
-    """'005930, 000660,aapl' -> ['005930', '000660', 'AAPL']. 순서 유지, 중복 제거. (순수 함수)"""
+    """'005930, 000660,aapl' -> ['005930', '000660', 'AAPL']. 순서 유지, 중복 제거. (순수 함수)
+
+    항목 뒤에 붙은 목표가·손절가(':stop=..:target=..')는 떼고 코드만 돌려준다 —
+    parse_alerts 가 따로 읽는다.
+    """
     out = []
     for s in (raw or "").split(","):
-        s = s.strip().upper()
+        s = s.split(":", 1)[0].strip().upper()
         if s and s not in out:
             out.append(s)
     return out
+
+
+# ----------------------------------------------------------------------
+# 목표가 · 손절가 (HOLDING_SYMBOLS 에 함께 적는다)
+#
+#   HOLDING_SYMBOLS=005930:stop=170000:target=250000,TSLA,PLTR:target=200
+#
+# 대시보드 '내 자산 → 목표가·손절가 → 메일 알림 설정 복사'가 이 한 줄을 만들어 준다.
+# 가격 단위는 종목이 거래되는 통화(국내 원, 해외 달러) — frontend/src/lib/alerts.ts 와
+# 같은 규칙이다. 현재가는 서빙 API 의 /api/quotes 로 받는다(해외 종목 시세·환율까지
+# 거기서 이미 처리하므로 같은 일을 두 번 짜지 않는다).
+# ----------------------------------------------------------------------
+ALERT_NEAR_PCT = 3.0         # frontend NEAR_PCT 와 같아야 한다
+API_BASE = os.environ.get("BRIEFING_API_BASE", "https://briefing-6pzj.onrender.com")
+KRX_CODE = re.compile(r"^\d{6}$")
+
+
+def parse_alerts(raw: str) -> dict:
+    """'005930:stop=170000:target=250000,TSLA' -> {'005930': {'stop': 170000.0, 'target': 250000.0}}.
+    값이 없는 종목은 빠진다. 숫자가 아니거나 목표가 <= 손절가인 항목은 버린다. (순수 함수)"""
+    out = {}
+    for entry in (raw or "").split(","):
+        parts = entry.strip().split(":")
+        sym = parts[0].strip().upper()
+        if not sym:
+            continue
+        setting = {}
+        for kv in parts[1:]:
+            key, _, val = kv.partition("=")
+            key = key.strip().lower()
+            if key not in ("stop", "target"):
+                continue
+            try:
+                num = float(val.replace(",", "").strip())
+            except ValueError:
+                continue
+            if num > 0:
+                setting[key] = num
+        if "stop" in setting and "target" in setting and setting["target"] <= setting["stop"]:
+            continue
+        if setting:
+            out[sym] = setting
+    return out
+
+
+def evaluate_alert(price, target=None, stop=None, near_pct=ALERT_NEAR_PCT):
+    """도달·근접 판정. 'target_hit' / 'stop_hit' / 'near_target' / 'near_stop' / None(감시 중).
+    frontend evaluateAlert 와 같은 순서·경계. (순수 함수)"""
+    if target is not None and price >= target:
+        return "target_hit"
+    if stop is not None and price <= stop:
+        return "stop_hit"
+    to_target = (target - price) / price * 100 if target is not None else None
+    to_stop = (price - stop) / price * 100 if stop is not None else None
+    near_t = to_target is not None and to_target <= near_pct
+    near_s = to_stop is not None and to_stop <= near_pct
+    if near_t and near_s:
+        return "near_target" if to_target <= to_stop else "near_stop"
+    if near_t:
+        return "near_target"
+    if near_s:
+        return "near_stop"
+    return None
+
+
+def alert_prices(payload) -> dict:
+    """/api/quotes 응답 → {종목: (종목 통화 현재가, 이름)}. 해외 종목은 원화 close 를
+    환율로 되돌린다(환율이 없으면 뺀다). (순수 함수)"""
+    fx = (payload or {}).get("fx_usdkrw")
+    out = {}
+    for q in (payload or {}).get("quotes") or []:
+        sym = str(q.get("symbol") or "").upper()
+        close = q.get("close")
+        if not sym or close is None:
+            continue
+        if KRX_CODE.match(sym):
+            out[sym] = (float(close), q.get("name") or sym)
+        elif fx:
+            out[sym] = (float(close) / float(fx), q.get("name") or sym)
+    return out
+
+
+def fmt_alert_price(value, symbol) -> str:
+    if KRX_CODE.match(symbol or ""):
+        return f"{round(value):,}원"
+    return f"${value:,.2f}"
+
+
+_ALERT_ORDER = {"target_hit": 0, "stop_hit": 0, "near_target": 1, "near_stop": 1}
+
+
+def evaluate_alerts(alerts: dict, prices: dict) -> list:
+    """설정된 종목마다 판정해 도달·근접만 돌려준다(급한 순). (순수 함수)
+    항목: {symbol, name, status, price, target, stop}"""
+    items = []
+    for sym, setting in alerts.items():
+        if sym not in prices:
+            continue
+        price, name = prices[sym]
+        status = evaluate_alert(price, setting.get("target"), setting.get("stop"))
+        if status:
+            items.append({"symbol": sym, "name": name, "status": status, "price": price,
+                          "target": setting.get("target"), "stop": setting.get("stop")})
+    return sorted(items, key=lambda it: _ALERT_ORDER[it["status"]])
+
+
+def _alert_line(it):
+    """판정 한 건 → (종류, 글)."""
+    sym, name = it["symbol"], it["name"]
+    now = fmt_alert_price(it["price"], sym)
+    if it["status"] == "target_hit":
+        return ("alert_up", f"{name} 목표가 도달 — 현재 {now} (목표 {fmt_alert_price(it['target'], sym)})")
+    if it["status"] == "stop_hit":
+        return ("alert_down", f"{name} 손절가 도달 — 현재 {now} (손절 {fmt_alert_price(it['stop'], sym)})")
+    if it["status"] == "near_target":
+        gap = (it["target"] - it["price"]) / it["price"] * 100
+        return ("item", f"{name} 목표가까지 +{gap:.1f}% — 현재 {now} (목표 {fmt_alert_price(it['target'], sym)})")
+    gap = (it["price"] - it["stop"]) / it["price"] * 100
+    return ("item", f"{name} 손절가까지 −{gap:.1f}% — 현재 {now} (손절 {fmt_alert_price(it['stop'], sym)})")
+
+
+def fetch_alert_prices(symbols: list) -> dict:
+    """서빙 API 에서 현재가를 받는다. 무료 인스턴스가 자고 있으면 깨우는 데 30~60초 걸린다."""
+    import requests
+    resp = requests.get(f"{API_BASE}/api/quotes", params={"symbols": ",".join(symbols)}, timeout=90)
+    resp.raise_for_status()
+    return alert_prices(resp.json())
 
 
 def pick_headlines(news_rows, signal_type, n: int = HEADLINES_PER_SIGNAL) -> list:
@@ -830,7 +961,7 @@ def _signal_sort_key(sig):
 
 
 def build_briefing(report_date, window, tickers, signals, daily,
-                   holdings=(), news=(), late_at=None) -> dict:
+                   holdings=(), news=(), late_at=None, alerts=(), alert_note=None) -> dict:
     """메일로 보낼 아침 브리핑. 제목과 본문 줄 목록을 돌려준다. (순수 함수)
 
     본문 줄은 (종류, 글) 쌍이다. 같은 줄을 평문과 HTML 두 가지로 그리기 위해서다.
@@ -839,6 +970,9 @@ def build_briefing(report_date, window, tickers, signals, daily,
     - news: 보유 종목 시그널의 근거 기사(id, ticker_id, title, sentiment).
     - late_at: 예비 cron 으로 늦게 돈 날의 발송 시각(KST). 주면 제목과 본문 맨 위에
       경고를 단다 — 아침 트리거가 죽어도 메일은 계속 오니, 메일에서 티가 나야 한다.
+    - alerts: evaluate_alerts 결과(목표가·손절가 도달·근접). 있으면 맨 위 블록으로,
+      도달이 있으면 제목 앞에도 붙인다.
+    - alert_note: 시세를 못 받아 판정을 못 했을 때 남길 한 줄.
     """
     by_id = {t["id"]: t for t in tickers}
     by_symbol = {t["symbol"]: t for t in tickers}
@@ -864,6 +998,12 @@ def build_briefing(report_date, window, tickers, signals, daily,
                   ("warn", f"예비 스케줄로 늦게 실행됐습니다(발송 {late_at:%H:%M}, 정상은 07:15 전후). "
                            "아침 7시 외부 스케줄러(cron-job.org) 호출이 없었거나 그 실행이 "
                            "실패했습니다 — cron-job.org 실행 기록을 확인하세요.")]
+
+    if alerts or alert_note:
+        lines += [("blank", ""), ("heading", "목표가 · 손절가")]
+        lines += [_alert_line(it) for it in alerts]
+        if alert_note:
+            lines.append(("text", alert_note))
 
     held_sig_count = 0
     if holdings:
@@ -906,13 +1046,20 @@ def build_briefing(report_date, window, tickers, signals, daily,
     subject = f"☀️ {day} 아침 브리핑 · 시그널 {len(all_sigs)}건"
     if held_sig_count:
         subject += f" (보유 {held_sig_count})"
+    hit_tags = []
+    if any(it["status"] == "target_hit" for it in alerts):
+        hit_tags.append("[목표가 도달]")
+    if any(it["status"] == "stop_hit" for it in alerts):
+        hit_tags.append("[손절가 도달]")
+    if hit_tags:
+        subject = " ".join(hit_tags) + " " + subject
     if late_at is not None:
         subject = "⚠️ [지연] " + subject
     return {"subject": subject, "lines": lines}
 
 
 _TEXT_PREFIX = {"title": "☀️ ", "warn": "⚠️ ", "heading": "■ ", "pos": "🔺 ", "neg": "🔻 ",
-                "item": "· ", "headline": "   - "}
+                "alert_up": "▲ ", "alert_down": "▼ ", "item": "· ", "headline": "   - "}
 
 
 def render_text(briefing) -> str:
@@ -931,12 +1078,15 @@ _HTML_STYLE = {
                "padding-bottom:4px;border-bottom:1px solid #e5e7eb",
     "pos": "color:#dc2626;font-weight:600;margin:6px 0 2px",   # 국내 관례: 상승=빨강
     "neg": "color:#2563eb;font-weight:600;margin:6px 0 2px",
+    "alert_up": "color:#dc2626;font-weight:700;margin:6px 0",
+    "alert_down": "color:#2563eb;font-weight:700;margin:6px 0",
     "item": "margin:4px 0",
     "headline": "color:#4b5563;font-size:13px;margin:2px 0 2px 16px",
     "text": "color:#6b7280;margin:4px 0",
 }
 # 제목·항목 구분은 스타일이 맡으므로, HTML 에는 방향 표시와 헤드라인 기호만 남긴다.
-_HTML_PREFIX = {"title": "☀️ ", "warn": "⚠️ ", "pos": "▲ ", "neg": "▼ ", "headline": "– "}
+_HTML_PREFIX = {"title": "☀️ ", "warn": "⚠️ ", "pos": "▲ ", "neg": "▼ ",
+                "alert_up": "▲ ", "alert_down": "▼ ", "headline": "– "}
 
 
 def render_html(briefing) -> str:
@@ -987,7 +1137,19 @@ def notify_briefing(tickers):
         today = TODAY.isoformat()
         sigs = get_sb().table("signals").select("*").eq("date", today).execute().data
         daily = get_sb().table("sentiment_daily").select("*").eq("date", today).execute().data
-        holdings = parse_holdings(os.environ.get("HOLDING_SYMBOLS", ""))
+        holdings_raw = os.environ.get("HOLDING_SYMBOLS", "")
+        holdings = parse_holdings(holdings_raw)
+
+        # 목표가·손절가: 시세를 못 받아도 메일은 보낸다(판정만 빠졌다고 적는다).
+        alert_settings = parse_alerts(holdings_raw)
+        alert_items, alert_note = [], None
+        if alert_settings:
+            try:
+                alert_items = evaluate_alerts(alert_settings,
+                                              fetch_alert_prices(list(alert_settings)))
+            except Exception as e:
+                print(f"::warning::[notify] 목표가·손절가 시세 조회 실패: {type(e).__name__}: {e}")
+                alert_note = "시세를 받지 못해 이번엔 목표가·손절가를 확인하지 못했어요."
 
         held_ids = {t["id"] for t in tickers if t["symbol"] in holdings}
         news_ids = [nid for s in (sigs or []) if s["ticker_id"] in held_ids
@@ -1003,7 +1165,8 @@ def notify_briefing(tickers):
             late_at = datetime.now(KST)
             print("::warning::[notify] 예비 cron 으로 실행됨 — 아침 외부 스케줄러 호출을 확인하세요")
         briefing = build_briefing(TODAY, briefing_window(), tickers, sigs, daily,
-                                  holdings, news, late_at=late_at)
+                                  holdings, news, late_at=late_at,
+                                  alerts=alert_items, alert_note=alert_note)
         send_gmail(address, app_password, to, briefing["subject"],
                    render_text(briefing), render_html(briefing))
         print(f"[notify] 메일 전송 완료: {briefing['subject']}")
