@@ -12,6 +12,7 @@ import type { NewsLists } from './components/NewsList'
 import { ReportView } from './components/ReportView'
 import { PortfolioPanel } from './components/PortfolioPanel'
 import { SideNav } from './components/SideNav'
+import { StockAvatar } from './components/StockAvatar'
 import { loadHoldings, saveHoldings } from './lib/portfolio'
 import type { Holding } from './lib/portfolio'
 import { isMarketLiveWindow, isUsMarketWindow, isWorldSymbol } from './lib/market'
@@ -288,7 +289,8 @@ export default function App() {
     <div className="layout">
       <SideNav page={page} reportDate={report?.date} badges={badges} />
 
-      <main className="content">
+      {/* key 로 화면이 바뀔 때마다 새로 그려 살짝 떠오르는 전환을 준다 */}
+      <main className="content" key={page}>
         <header className="page-head">
           <h1 className="page-title">{meta.title}</h1>
           <p className="page-desc">{meta.desc}</p>
@@ -296,14 +298,12 @@ export default function App() {
 
         {page === 'home' && (
           <>
-            <div className="panel">
-              <SummaryStrip
-                signals={signals}
-                tickerCount={tickers.length}
-                newsCount={news.all.length}
-                status={coreStatus}
-              />
-            </div>
+            <SummaryStrip
+              signals={signals}
+              tickerCount={tickers.length}
+              newsCount={news.all.length}
+              status={coreStatus}
+            />
 
             <section className="section">
               <h2 className="section-title">
@@ -319,8 +319,8 @@ export default function App() {
                 />
               ) : signals.length === 0 ? (
                 <p className="empty">
-                  발화된 감정 급변 시그널이 없습니다. 감정 기준선 대비 큰 변화가 잡히면 여기에
-                  표시됩니다.
+                  오늘은 감정이 크게 바뀐 종목이 없어요. 기준선보다 큰 변화가 잡히면 여기에
+                  보여 드릴게요.
                 </p>
               ) : (
                 <div className="signal-grid">
@@ -374,11 +374,13 @@ export default function App() {
             />
           ) : (
             <div className="panel">
-              <div className="tabs">
+              <div className="chips" role="group" aria-label="종목 선택">
                 {tickers.map((t) => (
                   <button
                     key={t.symbol}
-                    className={t.symbol === symbol ? 'tab active' : 'tab'}
+                    type="button"
+                    className={t.symbol === symbol ? 'chip active' : 'chip'}
+                    aria-pressed={t.symbol === symbol}
                     onClick={() => setSymbol(t.symbol)}
                   >
                     {t.name}
@@ -388,16 +390,22 @@ export default function App() {
 
               {metrics && last && (
                 <div className="quote">
-                  <span className="quote-name">{metrics.name}</span>
-                  <span className="quote-close mono">
-                    {last.close != null ? last.close.toLocaleString('ko-KR') : '—'}
-                  </span>
-                  {change !== null && (
-                    <span className={`quote-change mono dir-${dir}`}>
-                      {change > 0 ? '▲' : change < 0 ? '▼' : '—'} {Math.abs(change).toFixed(2)}%
+                  <StockAvatar name={metrics.name} size="lg" />
+                  <div className="quote-main">
+                    <span className="quote-name">{metrics.name}</span>
+                    <span className="quote-line">
+                      <span className="quote-close mono">
+                        {last.close != null ? `${last.close.toLocaleString('ko-KR')}원` : '—'}
+                      </span>
+                      {change !== null && (
+                        <span className={`quote-change mono dir-${dir}`}>
+                          {change > 0 ? '+' : change < 0 ? '−' : ''}
+                          {Math.abs(change).toFixed(2)}%
+                        </span>
+                      )}
                     </span>
-                  )}
-                  <span className="quote-date mono">{last.date}</span>
+                  </div>
+                  <span className="quote-date mono">{last.date} 종가</span>
                 </div>
               )}
 

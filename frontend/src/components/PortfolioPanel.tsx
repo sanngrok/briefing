@@ -18,6 +18,7 @@ import {
 } from '../lib/portfolio'
 import type { Holding, HoldingInput, HoldingRow } from '../lib/portfolio'
 import type { Status } from './LoadState'
+import { StockAvatar } from './StockAvatar'
 
 const EMPTY_FORM: HoldingInput = { symbol: '', name: '', quantity: '', avgPrice: '', memo: '' }
 
@@ -52,7 +53,12 @@ export function PortfolioPanel({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // 입력 폼은 평소엔 접어 둔다 — 자주 보는 건 평가금액이지 입력칸이 아니다.
+  // 보유 종목이 하나도 없을 때와 수정 중일 때는 펼친다.
+  const [formOpen, setFormOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  const showForm = formOpen || editingId !== null || holdings.length === 0
 
   const rows = useMemo(
     () => sortByReturn(computeRows(holdings, quotes, fxUsdKrw)),
@@ -87,6 +93,11 @@ export function PortfolioPanel({
     setError('')
   }
 
+  function closeForm() {
+    resetForm()
+    setFormOpen(false)
+  }
+
   function handleSymbolChange(value: string) {
     // 워치리스트 종목코드를 넣으면 종목명을 자동으로 채운다(직접 입력도 가능).
     const match = tickers.find((t) => t.symbol === normalizeSymbol(value))
@@ -119,7 +130,7 @@ export function PortfolioPanel({
       onChange([...holdings, holding])
       flash(`${holding.name} 추가됨`)
     }
-    resetForm()
+    closeForm()
   }
 
   function handleEdit(row: HoldingRow) {
@@ -133,6 +144,8 @@ export function PortfolioPanel({
       avgPrice: String(Math.round(row.avgPriceKrw)),
       memo: row.memo ?? '',
     })
+    // 폼은 목록 위에 펼쳐진다. 아래쪽 행을 눌렀으면 폼이 화면 밖일 수 있다.
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ block: 'nearest' }))
   }
 
   function handleDelete(row: HoldingRow) {
@@ -168,7 +181,7 @@ export function PortfolioPanel({
       )
         return
       onChange(parsed)
-      resetForm()
+      closeForm()
       flash(`${parsed.length}건 불러옴`)
     } catch {
       setError('JSON 파일을 읽지 못했습니다.')
@@ -179,127 +192,140 @@ export function PortfolioPanel({
   const dayDir = direction(totals.dayPnl)
 
   return (
-    <div className="panel pf">
+    <div className="pf">
       {storageFailed && (
         <p className="pf-warn">
-          브라우저 저장소를 쓸 수 없어 새로고침하면 사라집니다. (사생활 보호 모드 등)
+          브라우저 저장소를 쓸 수 없어 새로고침하면 사라져요. (사생활 보호 모드 등)
         </p>
       )}
 
-      <form className="pf-form" onSubmit={handleSubmit}>
-        <div className="pf-field">
-          <label htmlFor="pf-symbol">종목코드</label>
-          <input
-            id="pf-symbol"
-            list="pf-tickers"
-            placeholder="005930"
-            value={form.symbol}
-            onChange={(e) => handleSymbolChange(e.target.value)}
-          />
-          <datalist id="pf-tickers">
-            {tickers.map((t) => (
-              <option key={t.symbol} value={t.symbol}>
-                {t.name}
-              </option>
-            ))}
-          </datalist>
-        </div>
-        <div className="pf-field">
-          <label htmlFor="pf-name">종목명</label>
-          <input
-            id="pf-name"
-            placeholder="삼성전자"
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          />
-        </div>
-        <div className="pf-field">
-          <label htmlFor="pf-qty">수량</label>
-          <input
-            id="pf-qty"
-            inputMode="decimal"
-            placeholder="10"
-            value={form.quantity}
-            onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))}
-          />
-        </div>
-        <div className="pf-field">
-          <label htmlFor="pf-avg">평균 매입가</label>
-          <input
-            id="pf-avg"
-            inputMode="decimal"
-            placeholder="70,000"
-            value={form.avgPrice}
-            onChange={(e) => setForm((f) => ({ ...f, avgPrice: e.target.value }))}
-          />
-        </div>
-        <div className="pf-field pf-field-wide">
-          <label htmlFor="pf-memo">메모 (선택)</label>
-          <input
-            id="pf-memo"
-            placeholder="장기 보유"
-            value={form.memo ?? ''}
-            onChange={(e) => setForm((f) => ({ ...f, memo: e.target.value }))}
-          />
-        </div>
-        <div className="pf-actions">
-          <button type="submit" className="pf-btn pf-btn-primary">
-            {editingId ? '수정 저장' : '추가'}
-          </button>
-          {editingId && (
-            <button type="button" className="pf-btn" onClick={resetForm}>
-              취소
+      {rows.length > 0 && (
+        <section className="panel pf-hero" aria-label="평가 요약">
+          <div className="pf-hero-label">총 평가금액</div>
+          <div className="pf-hero-value mono">
+            {formatWon(totals.value)}
+            <span className="pf-hero-unit">원</span>
+          </div>
+          <div className={`pf-hero-pnl mono dir-${totalDir}`}>
+            {formatSigned(totals.pnl)}원 ({formatPct(totals.returnPct)})
+          </div>
+
+          <dl className="pf-stats">
+            <div className="pf-stat">
+              <dt>매입금액</dt>
+              <dd className="mono">{formatWon(totals.cost)}원</dd>
+            </div>
+            <div className="pf-stat">
+              <dt>전일 대비</dt>
+              <dd className={`mono dir-${dayDir}`}>{formatSigned(totals.dayPnl)}원</dd>
+            </div>
+            <div className="pf-stat">
+              <dt>보유 종목</dt>
+              <dd className="mono">{rows.length}개</dd>
+            </div>
+          </dl>
+        </section>
+      )}
+
+      {hitSignals.length > 0 && (
+        <p className="pf-signal-note">
+          <strong>보유 종목 {hitSignals.length}개에 감정 급변 시그널이 떴어요</strong>
+          <span>{hitSignals.map((r) => r.name).join(', ')}</span>
+        </p>
+      )}
+
+      <section className="panel pf-holdings">
+        <div className="pf-head">
+          <h2 className="pf-head-title">
+            보유 종목
+            {rows.length > 0 && <span className="pf-count mono">{rows.length}</span>}
+          </h2>
+          {!showForm && (
+            <button type="button" className="pf-btn pf-btn-weak" onClick={() => setFormOpen(true)}>
+              + 종목 추가
             </button>
           )}
         </div>
-      </form>
 
-      {error && <p className="pf-error">{error}</p>}
-      {notice && <p className="pf-notice">{notice}</p>}
+        {showForm && (
+          <form ref={formRef} className="pf-form" onSubmit={handleSubmit}>
+            <div className="pf-field">
+              <label htmlFor="pf-symbol">종목코드</label>
+              <input
+                id="pf-symbol"
+                list="pf-tickers"
+                placeholder="005930"
+                value={form.symbol}
+                onChange={(e) => handleSymbolChange(e.target.value)}
+              />
+              <datalist id="pf-tickers">
+                {tickers.map((t) => (
+                  <option key={t.symbol} value={t.symbol}>
+                    {t.name}
+                  </option>
+                ))}
+              </datalist>
+            </div>
+            <div className="pf-field">
+              <label htmlFor="pf-name">종목명</label>
+              <input
+                id="pf-name"
+                placeholder="삼성전자"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div className="pf-field">
+              <label htmlFor="pf-qty">수량</label>
+              <input
+                id="pf-qty"
+                inputMode="decimal"
+                placeholder="10"
+                value={form.quantity}
+                onChange={(e) => setForm((f) => ({ ...f, quantity: e.target.value }))}
+              />
+            </div>
+            <div className="pf-field">
+              <label htmlFor="pf-avg">평균 매입가</label>
+              <input
+                id="pf-avg"
+                inputMode="decimal"
+                placeholder="70,000"
+                value={form.avgPrice}
+                onChange={(e) => setForm((f) => ({ ...f, avgPrice: e.target.value }))}
+              />
+            </div>
+            <div className="pf-field pf-field-wide">
+              <label htmlFor="pf-memo">메모 (선택)</label>
+              <input
+                id="pf-memo"
+                placeholder="장기 보유"
+                value={form.memo ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, memo: e.target.value }))}
+              />
+            </div>
+            <div className="pf-actions">
+              <button type="submit" className="pf-btn pf-btn-primary">
+                {editingId ? '수정 저장' : '추가'}
+              </button>
+              {holdings.length > 0 && (
+                <button type="button" className="pf-btn" onClick={closeForm}>
+                  취소
+                </button>
+              )}
+            </div>
+          </form>
+        )}
 
-      {rows.length === 0 ? (
-        <p className="empty">
-          보유 종목을 추가하면 최근 종가로 평가손익을 계산해 보여줍니다. 입력값은 이 브라우저에만
-          저장되며 서버로 전송되지 않습니다.
-        </p>
-      ) : (
-        <>
-          <div className="pf-totals">
-            <div className="pf-total">
-              <span className="pf-total-label">매입금액</span>
-              <span className="pf-total-value mono">{formatWon(totals.cost)}</span>
-            </div>
-            <div className="pf-total">
-              <span className="pf-total-label">평가금액</span>
-              <span className="pf-total-value mono">{formatWon(totals.value)}</span>
-            </div>
-            <div className="pf-total">
-              <span className="pf-total-label">평가손익</span>
-              <span className={`pf-total-value mono dir-${totalDir}`}>
-                {formatSigned(totals.pnl)}
-              </span>
-            </div>
-            <div className="pf-total">
-              <span className="pf-total-label">수익률</span>
-              <span className={`pf-total-value mono dir-${totalDir}`}>
-                {formatPct(totals.returnPct)}
-              </span>
-            </div>
-            <div className="pf-total">
-              <span className="pf-total-label">전일 대비</span>
-              <span className={`pf-total-value mono dir-${dayDir}`}>
-                {formatSigned(totals.dayPnl)}
-              </span>
-            </div>
-          </div>
+        {error && <p className="pf-error">{error}</p>}
+        {notice && <p className="pf-notice">{notice}</p>}
 
-          {hitSignals.length > 0 && (
-            <p className="pf-signal-note">
-              보유 종목 중 {hitSignals.length}건에 감정 급변 시그널이 있습니다 —{' '}
-              {hitSignals.map((r) => r.name).join(', ')}
-            </p>
-          )}
-
+        {rows.length === 0 ? (
+          <p className="pf-empty">
+            보유 종목을 추가하면 최근 종가로 평가손익을 계산해 보여 드려요. 입력한 값은 이
+            브라우저에만 저장되고 서버로 보내지 않아요.
+          </p>
+        ) : (
           <div className="pf-table-wrap">
             <table className="pf-table">
               <thead>
@@ -312,7 +338,9 @@ export function PortfolioPanel({
                   <th className="num">평가손익</th>
                   <th className="num">수익률</th>
                   <th className="num">비중</th>
-                  <th />
+                  <th>
+                    <span className="sr-only">관리</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -322,14 +350,19 @@ export function PortfolioPanel({
                   return (
                     <tr key={r.id} className={editingId === r.id ? 'pf-row editing' : 'pf-row'}>
                       <td>
-                        <span className="pf-name">{r.name}</span>
-                        {signal && (
-                          <span className={`pf-sig sev-${signal.severity}`}>
-                            {signal.type === 'sentiment_surge_pos' ? '감정 급등' : '감정 급락'}
-                          </span>
-                        )}
-                        <span className="pf-symbol mono">{r.symbol}</span>
-                        {r.memo && <span className="pf-memo">{r.memo}</span>}
+                        <div className="pf-stock">
+                          <StockAvatar name={r.name} size="sm" />
+                          <div className="pf-stock-text">
+                            <span className="pf-name">{r.name}</span>
+                            {signal && (
+                              <span className={`pf-sig sev-${signal.severity}`}>
+                                {signal.type === 'sentiment_surge_pos' ? '감정 급등' : '감정 급락'}
+                              </span>
+                            )}
+                            <span className="pf-symbol mono">{r.symbol}</span>
+                            {r.memo && <span className="pf-memo">{r.memo}</span>}
+                          </div>
+                        </div>
                       </td>
                       <td className="num mono">{r.quantity.toLocaleString('ko-KR')}</td>
                       <td className="num mono">{formatWon(r.avgPriceKrw)}</td>
@@ -354,17 +387,24 @@ export function PortfolioPanel({
                       <td className={`num mono dir-${dir}`}>{formatSigned(r.pnl)}</td>
                       <td className={`num mono dir-${dir}`}>{formatPct(r.returnPct)}</td>
                       <td className="num mono">{formatPct(r.weight, 1, false)}</td>
-                      <td className="num pf-rowbtns">
-                        <button type="button" className="pf-btn pf-btn-sm" onClick={() => handleEdit(r)}>
-                          수정
-                        </button>
-                        <button
-                          type="button"
-                          className="pf-btn pf-btn-sm pf-btn-danger"
-                          onClick={() => handleDelete(r)}
-                        >
-                          삭제
-                        </button>
+                      <td className="num">
+                        {/* td 자체를 flex 로 만들면 표 줄 높이·구분선이 어긋나서 안쪽 div 로 감싼다 */}
+                        <div className="pf-rowbtns">
+                          <button
+                            type="button"
+                            className="pf-btn pf-btn-sm"
+                            onClick={() => handleEdit(r)}
+                          >
+                            수정
+                          </button>
+                          <button
+                            type="button"
+                            className="pf-btn pf-btn-sm pf-btn-danger"
+                            onClick={() => handleDelete(r)}
+                          >
+                            삭제
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -372,37 +412,37 @@ export function PortfolioPanel({
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        )}
 
-      {/* 백업 버튼은 목록이 비어 있어도 보여야 한다 — 가져오기로 복구할 수 있어야 하므로. */}
-      <div className="pf-foot">
-        <span className="pf-foot-note mono">
-          {rows.length > 0 &&
-            (quotesStatus === 'loading'
-              ? '시세 불러오는 중…'
-              : quotesStatus === 'error'
-                ? '시세를 불러오지 못했습니다 · 잠시 뒤 자동으로 다시 시도합니다'
-                : `${quotesLive ? '실시간(장중, 네이버 금융 기준 · 15초마다 갱신)' : quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
-                    totals.unpricedCount > 0
-                      ? ` · 시세 없는 ${totals.unpricedCount}건은 평가 제외`
-                      : ''
-                  }`)}
-        </span>
-        <span className="pf-foot-btns">
-          <button
-            type="button"
-            className="pf-btn pf-btn-sm"
-            onClick={handleExport}
-            disabled={holdings.length === 0}
-          >
-            내보내기
-          </button>
-          <button type="button" className="pf-btn pf-btn-sm" onClick={() => fileRef.current?.click()}>
-            가져오기
-          </button>
-        </span>
-      </div>
+        {/* 백업 버튼은 목록이 비어 있어도 보여야 한다 — 가져오기로 복구할 수 있어야 하므로. */}
+        <div className="pf-foot">
+          <span className="pf-foot-note mono">
+            {rows.length > 0 &&
+              (quotesStatus === 'loading'
+                ? '시세 불러오는 중…'
+                : quotesStatus === 'error'
+                  ? '시세를 불러오지 못했어요 · 잠시 뒤 자동으로 다시 시도해요'
+                  : `${quotesLive ? '실시간 (장중 · 네이버 금융 기준 · 15초마다 갱신)' : quoteDate ? `${quoteDate} 종가 기준` : '시세 기준일 없음'}${
+                      totals.unpricedCount > 0
+                        ? ` · 시세 없는 ${totals.unpricedCount}건은 평가 제외`
+                        : ''
+                    }`)}
+          </span>
+          <span className="pf-foot-btns">
+            <button
+              type="button"
+              className="pf-btn pf-btn-sm"
+              onClick={handleExport}
+              disabled={holdings.length === 0}
+            >
+              내보내기
+            </button>
+            <button type="button" className="pf-btn pf-btn-sm" onClick={() => fileRef.current?.click()}>
+              가져오기
+            </button>
+          </span>
+        </div>
+      </section>
 
       <input
         ref={fileRef}

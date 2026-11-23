@@ -43,9 +43,9 @@ const TABS: { key: NewsDirection; label: string }[] = [
 ]
 
 const EMPTY: Record<NewsDirection, string> = {
-  all: '표시할 뉴스가 없습니다.',
-  good: '호재로 분류된 기사가 없습니다.',
-  bad: '악재로 분류된 기사가 없습니다.',
+  all: '표시할 뉴스가 없어요.',
+  good: '호재로 분류된 기사가 없어요.',
+  bad: '악재로 분류된 기사가 없어요.',
 }
 
 function timeOf(iso?: string | null) {
@@ -74,12 +74,13 @@ export function NewsList({
 
   return (
     <div>
-      <div className="tabs news-tabs">
+      {/* 토스식 세그먼트 컨트롤 — 회색 홈 위로 흰 칸이 선택된 쪽을 가리킨다 */}
+      <div className="segmented news-tabs" role="group" aria-label="뉴스 방향">
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
-            className={`tab tab-${t.key}${filter === t.key ? ' active' : ''}`}
+            className={`seg seg-${t.key}${filter === t.key ? ' active' : ''}`}
             onClick={() => setFilter(t.key)}
             aria-pressed={filter === t.key}
             disabled={status !== 'ready'}

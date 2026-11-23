@@ -2,6 +2,7 @@ import ReactMarkdown from 'react-markdown'
 import type { Report } from '../api/client'
 import { LoadState } from './LoadState'
 import type { Status } from './LoadState'
+import { formatKoDate } from '../lib/date'
 
 export function ReportView({
   report,
@@ -18,13 +19,13 @@ export function ReportView({
     )
   }
   if (!report) {
-    return <p className="empty">아직 생성된 리포트가 없습니다.</p>
+    return <p className="empty">아직 만들어진 리포트가 없어요.</p>
   }
   return (
     <article className="report">
       <div className="report-meta">
-        {report.date}
-        {report.model ? ` · ${report.model}` : ''}
+        <span className="report-date">{formatKoDate(report.date)} 브리핑</span>
+        {report.model && <span className="report-model mono">{report.model}</span>}
       </div>
       <ReactMarkdown>{report.body_md}</ReactMarkdown>
     </article>
