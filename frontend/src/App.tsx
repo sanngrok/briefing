@@ -3,10 +3,8 @@ import { api } from './api/client'
 import type { Movers, Quote, Report, Signal, Ticker, TickerMetrics } from './api/client'
 import { LoadState } from './components/LoadState'
 import type { Status } from './components/LoadState'
-import { SummaryStrip } from './components/SummaryStrip'
-import { SignalCard } from './components/SignalCard'
 import { SentimentChart } from './components/SentimentChart'
-import { MoversPanel } from './components/MoversPanel'
+import { Home } from './components/Home'
 import { NewsList, NEWS_SHOWN } from './components/NewsList'
 import type { NewsLists } from './components/NewsList'
 import { ReportView } from './components/ReportView'
@@ -319,6 +317,7 @@ export default function App() {
 
   // 평가는 화면(내 자산)뿐 아니라 자산 기록·목표가 판정·배지에도 쓰여 여기서 한 번 한다.
   const pfRows = useMemo(() => computeRows(holdings, quotes, fxUsdKrw), [holdings, quotes, fxUsdKrw])
+  const pfTotals = useMemo(() => computeTotals(pfRows), [pfRows])
   const alertRows = useMemo(() => buildAlertRows(pfRows, alerts, fxUsdKrw), [pfRows, alerts, fxUsdKrw])
   const alertHits = useMemo(
     () => alertRows.filter((r) => r.status && isHit(r.status.kind)),
@@ -401,55 +400,30 @@ export default function App() {
       <SideNav page={page} reportDate={report?.date} badges={badges} />
 
       {/* key 로 화면이 바뀔 때마다 새로 그려 살짝 떠오르는 전환을 준다 */}
-      <main className="content" key={page}>
+      <main className={`content page-${page}`} key={page}>
         <header className="page-head">
           <h1 className="page-title">{meta.title}</h1>
           <p className="page-desc">{meta.desc}</p>
         </header>
 
         {page === 'home' && (
-          <>
-            <SummaryStrip
-              signals={signals}
-              tickerCount={tickers.length}
-              newsCount={news.all.length}
-              status={coreStatus}
-            />
-
-            <section className="section">
-              <h2 className="section-title">
-                오늘의 시그널
-                {signals[0] && <span className="section-hint mono">{signals[0].date} 기준</span>}
-              </h2>
-              {coreStatus.signals !== 'ready' ? (
-                <LoadState
-                  status={coreStatus.signals}
-                  rows={4}
-                  onRetry={loadCore}
-                  label="시그널을 불러오지 못했습니다."
-                />
-              ) : signals.length === 0 ? (
-                <p className="empty">
-                  오늘은 감정이 크게 바뀐 종목이 없어요. 기준선보다 큰 변화가 잡히면 여기에
-                  보여 드릴게요.
-                </p>
-              ) : (
-                <div className="signal-grid">
-                  {signals.map((s, i) => (
-                    <SignalCard key={`${s.symbol}-${s.type}-${i}`} signal={s} />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="section">
-              <h2 className="section-title">
-                급등락 종목
-                <span className="section-hint">워치리스트 등락률 상위 · ±5% 이상은 급등락 표시</span>
-              </h2>
-              <MoversPanel movers={movers} status={coreStatus.movers} onRetry={loadCore} />
-            </section>
-          </>
+          <Home
+            holdingsCount={holdings.length}
+            totals={pfTotals}
+            quotesStatus={quotesStatus}
+            alertHits={alertHits}
+            signals={signals}
+            signalsStatus={coreStatus.signals}
+            signalDay={report?.date ?? signals[0]?.date}
+            news={news.all}
+            newsStatus={coreStatus.news}
+            movers={movers}
+            moversStatus={coreStatus.movers}
+            tickerCount={tickers.length}
+            reportDate={report?.date}
+            reportStatus={coreStatus.report}
+            onRetry={loadCore}
+          />
         )}
 
         {page === 'assets' && (
